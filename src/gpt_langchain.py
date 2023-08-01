@@ -2020,8 +2020,8 @@ def get_existing_hash_ids(db):
 def run_qa_db(**kwargs):
     func_names = list(inspect.signature(_run_qa_db).parameters)
     # hard-coded defaults
-    kwargs['answer_with_sources'] = True
-    kwargs['show_rank'] = False
+    kwargs['answer_with_sources'] = kwargs.get('answer_with_sources', True)
+    kwargs['show_rank'] = kwargs.get('show_rank', False)
     missing_kwargs = [x for x in func_names if x not in kwargs]
     assert not missing_kwargs, "Missing kwargs for run_qa_db: %s" % missing_kwargs
     # only keep actual used
@@ -2050,6 +2050,7 @@ def _run_qa_db(query=None,
                prompt_type=None,
                prompt_dict=None,
                answer_with_sources=True,
+               append_sources_to_answer=True,
                cut_distance=1.64,
                add_chat_history_to_context=True,
                sanitize_bot_response=False,
@@ -2073,6 +2074,8 @@ def _run_qa_db(query=None,
                langchain_agents=None,
                document_subset=DocumentSubset.Relevant.name,
                document_choice=[DocumentChoice.ALL.value],
+               pre_prompt_summary=None,
+               prompt_summary=None,
                n_jobs=-1,
                verbose=False,
                cli=False,
@@ -2126,32 +2129,32 @@ def _run_qa_db(query=None,
     # can't pass through langchain in get_chain() to LLM: https://github.com/hwchase17/langchain/issues/6638
     llm, model_name, streamer, prompt_type_out, async_output = \
         get_llm(use_openai_model=use_openai_model, model_name=model_name,
-                                                         model=model,
-                                                         tokenizer=tokenizer,
-                                                         inference_server=inference_server,
-                                                         langchain_only_model=langchain_only_model,
-                                                         stream_output=stream_output,
-                                                         async_output=async_output,
-                                                         num_async=num_async,
-                                                         do_sample=do_sample,
-                                                         temperature=temperature,
-                                                         top_k=top_k,
-                                                         top_p=top_p,
-                                                         num_beams=num_beams,
-                                                         max_new_tokens=max_new_tokens,
-                                                         min_new_tokens=min_new_tokens,
-                                                         early_stopping=early_stopping,
-                                                         max_time=max_time,
-                                                         repetition_penalty=repetition_penalty,
-                                                         num_return_sequences=num_return_sequences,
-                                                         prompt_type=prompt_type,
-                                                         prompt_dict=prompt_dict,
-                                                         prompter=prompter,
-                                                         context=context if add_chat_history_to_context else '',
-                                                         iinput=iinput if add_chat_history_to_context else '',
-                                                         sanitize_bot_response=sanitize_bot_response,
-                                                         verbose=verbose,
-                                                         )
+                model=model,
+                tokenizer=tokenizer,
+                inference_server=inference_server,
+                langchain_only_model=langchain_only_model,
+                stream_output=stream_output,
+                async_output=async_output,
+                num_async=num_async,
+                do_sample=do_sample,
+                temperature=temperature,
+                top_k=top_k,
+                top_p=top_p,
+                num_beams=num_beams,
+                max_new_tokens=max_new_tokens,
+                min_new_tokens=min_new_tokens,
+                early_stopping=early_stopping,
+                max_time=max_time,
+                repetition_penalty=repetition_penalty,
+                num_return_sequences=num_return_sequences,
+                prompt_type=prompt_type,
+                prompt_dict=prompt_dict,
+                prompter=prompter,
+                context=context if add_chat_history_to_context else '',
+                iinput=iinput if add_chat_history_to_context else '',
+                sanitize_bot_response=sanitize_bot_response,
+                verbose=verbose,
+                )
 
     use_docs_planned = False
     scores = []
@@ -2248,7 +2251,9 @@ def _run_qa_db(query=None,
         extra = ''
         yield ret, extra
     elif answer is not None:
-        ret, extra = get_sources_answer(query, docs, answer, scores, show_rank, answer_with_sources,
+        ret, extra = get_sources_answer(query, docs, answer, scores, show_rank,
+                                        answer_with_sources,
+                                        append_sources_to_answer,
                                         verbose=verbose,
                                         t_run=t_run,
                                         count_input_tokens=llm.count_input_tokens
@@ -2306,6 +2311,8 @@ def get_chain(query=None,
               langchain_agents=None,
               document_subset=DocumentSubset.Relevant.name,
               document_choice=[DocumentChoice.ALL.value],
+              pre_prompt_summary=None,
+              prompt_summary=None,
               n_jobs=-1,
               # beyond run_db_query:
               llm=None,
@@ -2365,7 +2372,7 @@ def get_chain(query=None,
         if iinput:
             query = "%s\n%s" % (query, iinput)
 
-        if 'falcon' in model_name:
+        if 'falcon' in model_name or 'Llama-2'.lower() in model_name.lower():
             extra = "According to only the information in the document sources provided within the context above, "
             prefix = "Pay attention and remember information below, which will help to answer the question or imperative after the context ends."
         elif inference_server in ['openai', 'openai_chat']:
@@ -2385,24 +2392,28 @@ def get_chain(query=None,
             template_if_no_docs = """%s{context}%s{question}""" % (prefix, extra)
     elif langchain_action in [LangChainAction.SUMMARIZE_ALL.value, LangChainAction.SUMMARIZE_MAP.value]:
         none = ['', '\n', None]
-        if query in none and iinput in none:
-            prompt_summary = "Using only the text above, write a condensed and concise summary of key results (preferably as bullet points):\n"
-        elif query not in none:
-            prompt_summary = "Focusing on %s, write a condensed and concise Summary:\n" % query
-        elif iinput not in None:
-            prompt_summary = iinput
-        else:
-            prompt_summary = "Focusing on %s, %s:\n" % (query, iinput)
+
+        if not pre_prompt_summary:
+            pre_prompt_summary = """In order to write a concise single-paragraph or bulleted list summary, pay attention to the following text"""
+        if not prompt_summary:
+            if query in none and iinput in none:
+                prompt_summary = "Using only the text above, write a condensed and concise summary of key results (preferably as bullet points):\n"
+            elif query not in none:
+                prompt_summary = "Focusing on %s, write a condensed and concise Summary:\n" % query
+            elif iinput not in None:
+                prompt_summary = iinput
+            else:
+                prompt_summary = "Focusing on %s, %s:\n" % (query, iinput)
         # don't auto reduce
         auto_reduce_chunks = False
         if langchain_action == LangChainAction.SUMMARIZE_MAP.value:
             fstring = '{text}'
         else:
             fstring = '{input_documents}'
-        template = """In order to write a concise single-paragraph or bulleted list summary, pay attention to the following text:
+        template = """%s:
 \"\"\"
 %s
-\"\"\"\n%s""" % (fstring, prompt_summary)
+\"\"\"\n%s""" % (pre_prompt_summary, fstring, prompt_summary)
         template_if_no_docs = "Exactly only say: There are no documents to summarize."
     elif langchain_action in [LangChainAction.SUMMARIZE_REFINE]:
         template = ''  # unused
@@ -2657,7 +2668,9 @@ def get_chain(query=None,
     return docs, target, scores, use_docs_planned, have_any_docs
 
 
-def get_sources_answer(query, docs, answer, scores, show_rank, answer_with_sources, verbose=False,
+def get_sources_answer(query, docs, answer, scores, show_rank,
+                       answer_with_sources, append_sources_to_answer,
+                       verbose=False,
                        t_run=None,
                        count_input_tokens=None, count_output_tokens=None):
     if verbose:
@@ -2699,7 +2712,10 @@ def get_sources_answer(query, docs, answer, scores, show_rank, answer_with_sourc
         extra = '\n' + sorted_sources_urls
     else:
         extra = ''
-    ret = answer + extra
+    if append_sources_to_answer:
+        ret = answer + extra
+    else:
+        ret = answer
     return ret, extra
 
 

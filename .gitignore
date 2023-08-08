@@ -37,3 +37,6 @@ Dockerfile-runner.dockerfile
 venv
 
 .direnv
+db_dir_UserData_**
+locks/
+sources_dir/

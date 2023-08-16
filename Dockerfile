@@ -10,12 +10,12 @@ RUN apt-get update && apt-get install -y \
     software-properties-common \
     pandoc
 
-ENV PATH="/root/miniconda3/bin:${PATH}"
-ARG PATH="/root/miniconda3/bin:${PATH}"
+ENV PATH="/h2ogpt_conda/bin:${PATH}"
+ARG PATH="/h2ogpt_conda/bin:${PATH}"
 
 RUN wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh && \
-    mkdir /root/.conda && \
-    bash ./Miniconda3-py310_23.1.0-1-Linux-x86_64.sh -b && \
+    mkdir -p h2ogpt_conda && \
+    bash ./Miniconda3-py310_23.1.0-1-Linux-x86_64.sh -b -u -p /h2ogpt_conda && \
     conda install python=3.10 -c conda-forge -y
 
 WORKDIR /workspace
@@ -44,13 +44,24 @@ RUN python3.10 -m pip install https://github.com/jllllll/exllama/releases/downlo
 COPY . .
 
 RUN sp=`python3.10 -c 'import site; print(site.getsitepackages()[0])'` && sed -i 's/posthog\.capture/return\n            posthog.capture/' $sp/chromadb/telemetry/posthog.py
-RUN sed -i 's/# n_gpu_layers=20/n_gpu_layers=20/g' /workspace/.env_gpt4all
 
 EXPOSE 8888
 EXPOSE 7860
 
 ENV TRANSFORMERS_CACHE=/workspace/.cache/huggingface/hub/
 
-COPY build_info.txt /build_info.txt
+COPY build_info.txt* /build_info.txt
+RUN touch /build_info.txt
+
+ARG user=h2ogpt
+ARG group=h2ogpt
+ARG uid=1000
+ARG gid=1000
+
+RUN groupadd -g ${gid} ${group} && useradd -u ${uid} -g ${group} -s /bin/bash ${user}
+RUN chmod -R a+rwx /workspace
+RUN chmod -R a+rwx /h2ogpt_conda
+
+USER h2ogpt
 
 ENTRYPOINT ["python3.10"]

@@ -119,7 +119,7 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
     export FORCE_CMAKE=1
     CMAKE_ARGS="-DLLAMA_CUBLAS=on" FORCE_CMAKE=1 pip install llama-cpp-python==0.1.73 --no-cache-dir --verbose
    ```
-  * By default, we set `n_gpu_layers` to large value, so llama.cpp offloads all layers for maximum GPU performance.  You can control this by uncommenting `# n_gpu_layers` and set to some value in `.env_gpt4all`.  For highest performance, offload *all* layers.
+  * By default, we set `n_gpu_layers` to large value, so llama.cpp offloads all layers for maximum GPU performance.  You can control this by passing `--llamacpp_dict="{n_gpu_layers=20}"` for value 20, or setting in UI.  For highest performance, offload *all* layers.
     That is, one gets maximum performance if one sees in startup of h2oGPT all layers offloaded:
       ```text
     llama_model_load_internal: offloaded 35/35 layers to GPU
@@ -157,7 +157,11 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
 
   UI using GPU with at least 24GB with streaming:
   ```bash
-  python generate.py --base_model=h2oai/h2ogpt-oasst1-512-12b --load_8bit=True  --score_model=None --langchain_mode='UserData' --user_path=user_path
+  python generate.py --base_model=h2oai/h2ogpt-4096-llama2-13b-chat --load_8bit=True  --score_model=None --langchain_mode='UserData' --user_path=user_path
+  ```
+  Same with a smaller model without quantization:
+  ```bash
+  python generate.py --base_model=h2oai/h2ogpt-4096-llama2-7b-chat --score_model=None --langchain_mode='UserData' --user_path=user_path
   ```
   UI using LLaMa.cpp LLaMa2 model:
   ```bash
@@ -168,12 +172,18 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
 
   If using OpenAI for the LLM is ok, but you want documents to be parsed and embedded locally, then do:
   ```bash
-  python generate.py  --inference_server=openai_chat --base_model=gpt-3.5-turbo --score_model=None
+  OPENAI_API_KEY=<key> python generate.py  --inference_server=openai_chat --base_model=gpt-3.5-turbo --score_model=None
   ```
-  and perhaps you want better image caption performance and focus local GPU on that, then do:
+  where `<key>` should be replaced by your OpenAI key that probably starts with `sk-`.  OpenAI is **not** recommended for private document question-answer, but it can be a good reference for testing purposes or when privacy is not required.  
+  Perhaps you want better image caption performance and focus local GPU on that, then do:
   ```bash
-  python generate.py  --inference_server=openai_chat --base_model=gpt-3.5-turbo --score_model=None --captions_model=Salesforce/blip2-flan-t5-xl
+  OPENAI_API_KEY=<key> python generate.py  --inference_server=openai_chat --base_model=gpt-3.5-turbo --score_model=None --captions_model=Salesforce/blip2-flan-t5-xl
   ```
+  For Azure OpenAI:
+  ```bash
+   OPENAI_API_KEY=<key> python generate.py --inference_server="openai_azure_chat:<deployment_name>:<base_url>:<api_version>" --base_model=gpt-3.5-turbo --h2ocolors=False --langchain_mode=UserData
+   ```
+  where the entry `<deployment_name>` is required for Azure, others are optional and can be filled with string `None` or have empty input between `:`.  Azure OpenAI is a bit safer for private access to Azure-based docs.
   
   Add `--share=True` to make gradio server visible via sharable URL.
  

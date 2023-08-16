@@ -23,6 +23,12 @@ prompt_type_to_model_name = {
         'gpt2',
         'distilgpt2',
         'mosaicml/mpt-7b-storywriter',
+        'meta-llama/Llama-2-7b',
+        'meta-llama/Llama-2-13b',
+        'meta-llama/Llama-2-70b',
+        'h2oai/h2ogpt-4096-llama2-7b',
+        'h2oai/h2ogpt-4096-llama2-13b',
+        'h2oai/h2ogpt-4096-llama2-70b',
     ],
     'gptj': ['gptj', 'gpt4all_llama'],
     'prompt_answer': [
@@ -88,6 +94,9 @@ prompt_type_to_model_name = {
         'h2oai/h2ogpt-oasst1-4096-llama2-70b',
         'llama',
         'TheBloke/Llama-2-7b-Chat-GPTQ',
+        'h2oai/h2ogpt-4096-llama2-7b-chat',
+        'h2oai/h2ogpt-4096-llama2-13b-chat',
+        'h2oai/h2ogpt-4096-llama2-70b-chat',
     ],
     "beluga": ['stabilityai/StableBeluga2'],
     "wizard3nospace": ['WizardLM/WizardLM-13B-V1.2'],
@@ -639,9 +648,10 @@ ASSISTANT:
             PreResponse += " "
     elif prompt_type in [PromptType.beluga.value, str(PromptType.beluga.value),
                          PromptType.beluga.name]:
-        if use_system_prompt and histi in [-1, 0]:
+        sys_msg = """### System:\nYou are Stable Beluga, an AI that follows instructions extremely well. Help as much as you can. Remember, be safe, and don't do anything illegal.\n\n"""
+        if use_system_prompt and not (chat and reduced):
             # too much safety, hurts accuracy
-            promptA = promptB = """### System:\nYou are Stable Beluga, an AI that follows instructions extremely well. Help as much as you can. Remember, be safe, and don't do anything illegal.\n\n"""
+            promptA = promptB = sys_msg
         else:
             promptA = promptB = ''
         PreInput = None

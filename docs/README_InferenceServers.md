@@ -1,6 +1,6 @@
 # Inference Servers
 
-One can connect to Hugging Face text generation inference server, gradio servers running h2oGPT, or OpenAI servers.  
+One can connect to Hugging Face text generation inference server, gradio servers running h2oGPT, OpenAI, or Azure OpenAI servers.  
 
 ## Hugging Face Text Generation Inference Server-Client
 
@@ -174,7 +174,7 @@ One can pass, e.g., `--max_max_new_tokens=2048 --max_new_tokens=512` to generate
 
 For efficient parallel summarization with 13B LLaMa2 on single A100:
 ```bash
-python --inference_server=http://192.168.1.46:6112 --base_model=meta-llama/Llama-2-13b-chat-hf --score_model=None --save_dir=save_gpt13 --max_max_new_tokens=2048 --max_new_tokens=1024 --langchain_mode=LLM --visible_langchain_modes="['LLM', 'UserData', 'MyData']" --captions_model=Salesforce/blip2-flan-t5-xl --num_async=10 --top_k_docs=-1
+python --inference_server=http://192.168.1.46:6112 --base_model=meta-llama/Llama-2-13b-chat-hf --score_model=None --save_dir=save_gpt13 --max_max_new_tokens=2048 --max_new_tokens=1024 --langchain_mode=LLM --langchain_modes="['LLM', 'UserData', 'MyData']" --captions_model=Salesforce/blip2-flan-t5-xl --num_async=10 --top_k_docs=-1
 ```
 which achieves about 80 output tokens/second, using 10 simultaneous streams and all document pages/parts.  In about 2 minutes, it can handle summarization of a complete 30 page ArXiV paper using LangChain map-reduce with asyncio bugs fixed: https://github.com/langchain-ai/langchain/issues/8391 .  In UI or API calls, one should disable streaming since the threading used by streaming does not mix well with asyncio. 
 
@@ -207,6 +207,14 @@ If you have an OpenAI key and set an ENV `OPENAI_API_KEY`, then you can access O
 OPENAI_API_KEY=<key> python generate.py --inference_server="openai_chat" --base_model=gpt-3.5-turbo --h2ocolors=False --langchain_mode=UserData
 ```
 where `<key>` should be replaced by your OpenAI key that probably starts with `sk-`.  OpenAI is **not** recommended for private document question-answer, but it can be a good reference for testing purposes or when privacy is not required.
+
+## Azure OpenAI Inference Server-Client
+
+If you have an Azure OpenAI subscription with OpenAI key and set an ENV `OPENAI_API_KEY`, then you can access Azure OpenAI models via gradio by running:
+```bash
+OPENAI_API_KEY=<key> python generate.py --inference_server="openai_azure_chat:<deployment_name>:<base_url>:<api_version>" --base_model=gpt-3.5-turbo --h2ocolors=False --langchain_mode=UserData
+```
+where `<key>` should be replaced by your OpenAI key that probably starts with `sk-`.  OpenAI is **not** recommended for private document question-answer, but it can be a good reference for testing purposes or when privacy is not required.  The entry `<deployment_name>` is required for Azure, others are optional and can be filled with None or have empty input between `:`.
 
 ## vLLM Inference Server-Client
 

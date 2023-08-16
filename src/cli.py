@@ -12,11 +12,12 @@ def run_cli(  # for local function:
         debug=None, chat_context=None,
         examples=None, memory_restriction_level=None,
         # for get_model:
-        score_model=None, load_8bit=None, load_4bit=None, load_half=None,
+        score_model=None, load_8bit=None, load_4bit=None, low_bit_mode=None, load_half=None,
         load_gptq=None, load_exllama=None, use_safetensors=None, revision=None,
         use_gpu_id=None, tokenizer_base_model=None,
         gpu_id=None, n_jobs=None, local_files_only=None, resume_download=None, use_auth_token=None,
         trust_remote_code=None, offload_folder=None, rope_scaling=None, max_seq_len=None, compile_model=None,
+        llamacpp_dict=None,
         # for some evaluate args
         stream_output=None, async_output=None, num_async=None,
         prompt_type=None, prompt_dict=None, system_prompt=None,
@@ -31,9 +32,6 @@ def run_cli(  # for local function:
         # for evaluate kwargs
         src_lang=None, tgt_lang=None, concurrency_count=None, save_dir=None, sanitize_bot_response=None,
         model_state0=None,
-        langchain_modes0=None,
-        langchain_mode_paths0=None,
-        visible_langchain_modes0=None,
         max_max_new_tokens=None,
         is_public=None,
         max_max_time=None,
@@ -45,6 +43,7 @@ def run_cli(  # for local function:
         cut_distance=None,
         answer_with_sources=None,
         append_sources_to_answer=None,
+        show_accordions=None,
         add_chat_history_to_context=None,
         db_type=None, first_para=None, text_limit=None, verbose=None, cli=None, reverse_docs=None,
         use_cache=None,
@@ -74,9 +73,12 @@ def run_cli(  # for local function:
                           inference_server=inference_server, prompt_type=prompt_type, prompt_dict=prompt_dict)
         model_state = dict(model=model, tokenizer=tokenizer, device=device)
         model_state.update(model_dict)
-        fun = partial(evaluate, model_state, my_db_state0, selection_docs_state0,
-                      **get_kwargs(evaluate, exclude_names=['model_state', 'my_db_state',
-                                                            'selection_docs_state'] + eval_func_param_names,
+        requests_state0 = {}
+        fun = partial(evaluate, model_state, my_db_state0, selection_docs_state0, requests_state0,
+                      **get_kwargs(evaluate, exclude_names=['model_state',
+                                                            'my_db_state',
+                                                            'selection_docs_state',
+                                                            'requests_state'] + eval_func_param_names,
                                    **locals()))
 
         example1 = examples[-1]  # pick reference example

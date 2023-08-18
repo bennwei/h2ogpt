@@ -213,7 +213,8 @@ def test_qa_daidocs_db_chunk_hf_dbs(db_type, top_k_docs):
     langchain_mode = 'DriverlessAI docs'
     langchain_action = LangChainAction.QUERY.value
     langchain_agents = []
-    persist_directory = get_persist_directory(langchain_mode, langchain_type=LangChainTypes.SHARED.value)
+    persist_directory, langchain_type = get_persist_directory(langchain_mode, langchain_type=LangChainTypes.SHARED.value)
+    assert langchain_type == LangChainTypes.SHARED.value
     remove(persist_directory)
     from src.gpt_langchain import _run_qa_db
     query = "Which config.toml enables pytorch for NLP?"
@@ -247,6 +248,7 @@ def test_qa_daidocs_db_chunk_hf_dbs_switch_embedding(db_type):
     prompt_type = 'human_bot'
     all_kwargs = dict(load_8bit=False,
                       load_4bit=False,
+                      low_bit_mode=1,
                       load_half=True,
                       load_gptq=False,
                       load_exllama=False,
@@ -278,7 +280,8 @@ def test_qa_daidocs_db_chunk_hf_dbs_switch_embedding(db_type):
     langchain_mode = 'DriverlessAI docs'
     langchain_action = LangChainAction.QUERY.value
     langchain_agents = []
-    persist_directory = get_persist_directory(langchain_mode, langchain_type=LangChainTypes.SHARED.value)
+    persist_directory, langchain_type = get_persist_directory(langchain_mode, langchain_type=LangChainTypes.SHARED.value)
+    assert langchain_type == LangChainTypes.SHARED.value
     remove(persist_directory)
     from src.gpt_langchain import _run_qa_db
     query = "Which config.toml enables pytorch for NLP?"

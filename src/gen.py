@@ -26,7 +26,7 @@ warnings.filterwarnings('ignore', category=UserWarning, message='TypedStorage is
 from evaluate_params import eval_func_param_names, no_default_param_names, input_args_list
 from enums import DocumentSubset, LangChainMode, no_lora_str, model_token_mapping, no_model_str, \
     LangChainAction, LangChainAgent, DocumentChoice, LangChainTypes, super_source_prefix, \
-    super_source_postfix
+    super_source_postfix, t5_type, get_langchain_prompts
 from loaders import get_loaders
 from utils import set_seed, clear_torch_cache, NullContext, wrapped_partial, EThread, get_githash, \
     import_matplotlib, get_device, makedirs, get_kwargs, start_faulthandler, get_hf_server, FakeTokenizer, \
@@ -55,7 +55,7 @@ def main(
         load_8bit: bool = False,
         load_4bit: bool = False,
         low_bit_mode: int = 1,
-        load_half: bool = True,
+        load_half: bool = None,
         load_gptq: str = '',
         load_exllama: bool = False,
         use_safetensors: bool = False,
@@ -210,9 +210,14 @@ def main(
         answer_with_sources: bool = True,
         append_sources_to_answer: bool = True,
         show_accordions: bool = True,
-        pre_prompt_summary: str = '',
-        prompt_summary: str = '',
+        show_link_in_sources: bool = True,
+        pre_prompt_query: str = None,
+        prompt_query: str = None,
+        pre_prompt_summary: str = None,
+        prompt_summary: str = None,
         add_chat_history_to_context: bool = True,
+        context: str = '',
+        iinput: str = '',
         allow_upload_to_user_data: bool = True,
         reload_langchain_state: bool = True,
         allow_upload_to_my_data: bool = True,
@@ -242,7 +247,8 @@ def main(
     :param low_bit_mode: 0: no quantization config 1: change compute 2: nf4 3: double quant 4: 2 and 3
            See: https://huggingface.co/docs/transformers/main_classes/quantization
            If using older bitsandbytes or transformers, 0 is required
-    :param load_half: load model in float16
+    :param load_half: load model in float16 (None means auto, which means True unless t5 based model)
+                      otherwise specify bool
     :param load_gptq: to load model with GPTQ, put model_basename here, e.g. gptq_model-4bit--1g
     :param load_exllama: whether to use exllama (only applicable to LLaMa1/2 models with 16-bit or GPTQ
     :param use_safetensors: to use safetensors version (assumes file/HF points to safe tensors version)
@@ -489,11 +495,19 @@ def main(
     :param answer_with_sources: Whether to determine (and return) sources
     :param append_sources_to_answer: Whether to place source information in chat response (ignored by LLM).  Always disabled for API.
     :param show_accordions: whether to show accordion for document references in chatbot UI
-    :param pre_prompt_summary: prompt before documents to summarize, if empty string then use internal defaults
-    :param prompt_summary: prompt after documents to summarize, if empty string then use internal defaults
+    :param show_link_in_sources: Whether to show URL link to source document in references
+    :param pre_prompt_query: prompt before documents to query, if None then use internal defaults
+    :param prompt_query: prompt after documents to query, if None then use internal defaults
+    :param pre_prompt_summary: prompt before documents to summarize, if None then use internal defaults
+    :param prompt_summary: prompt after documents to summarize, if None then use internal defaults
+           For summarize, normal to have empty query (nothing added in ask anything in UI or empty string in API)
+           If pass query, template is "Focusing on %s, %s" % (query, prompt_summary)
+           If pass query and iinput, template is "Focusing on %s, %s, %s" % (query, iinput, prompt_summary)
     :param add_chat_history_to_context: Include chat context when performing action
            Not supported yet for openai_chat when using document collection instead of LLM
            Also not supported when using CLI mode
+    :param context: Default context to use (for system pre-context in gradio UI)
+    :param iinput: Default input for instruction-based prompts
     :param allow_upload_to_user_data: Whether to allow file uploads to update shared vector db (UserData or custom user dbs)
            Ensure pass user_path for the files uploaded to be moved to this location for linking.
     :param reload_langchain_state: Whether to reload langchain_modes.pkl file that contains any new user collections.
@@ -503,7 +517,11 @@ def main(
     :param enable_sources_list: Whether to allow list (or download for non-shared db) of list of sources for chosen db
     :param chunk: Whether to chunk data (True unless know data is already optimally chunked)
     :param chunk_size: Size of chunks, with typically top-4 passed to LLM, so needs to be in context length
-    :param top_k_docs: number of chunks to give LLM
+    :param top_k_docs: For langchain_action query: number of chunks to give LLM
+                       -1 : auto-fills context up to max_seq_len
+                       For langchain_action summarize: number of document parts, like pages for PDF.
+                       There's no such thing as chunks for summarization.
+                       -1 : auto-fills context up to max_seq_len
     :param reverse_docs: whether to reverse docs order so most relevant is closest to question.
            Best choice for sufficiently smart model, and truncation occurs for oldest context, so best then too.
            But smaller 6_9 models fail to use newest context and can get stuck on old information.
@@ -741,6 +759,10 @@ def main(
     n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     n_gpus, gpu_ids = cuda_vis_check(n_gpus)
 
+    if load_half is None and t5_type(base_model):
+        load_half = False
+        print("load_half=%s auto-set for %s to avoid bad generation" % (load_half, base_model), flush=True)
+
     if n_gpus == 0 or get_device() == "mps":
         # No CUDA GPUs usable
 
@@ -752,7 +774,9 @@ def main(
         load_8bit = False
         load_4bit = False
         low_bit_mode = 1
-        load_half = False
+        if load_half is None:
+            # wouldn't work if specified True, but respect
+            load_half = False
         load_gptq = ''
         load_exllama = False
         use_gpu_id = False
@@ -770,6 +794,8 @@ def main(
         if score_model == 'auto':
             score_model = ''
     else:
+        if load_half is None:
+            load_half = True
         # CUDA GPUs visible
         if score_model == 'auto':
             if n_gpus >= 2:
@@ -815,7 +841,10 @@ def main(
         get_generate_params(model_lower,
                             chat,
                             stream_output, show_examples,
-                            prompt_type, prompt_dict, system_prompt,
+                            prompt_type, prompt_dict,
+                            pre_prompt_query, prompt_query,
+                            pre_prompt_summary, prompt_summary,
+                            system_prompt,
                             temperature, top_p, top_k, num_beams,
                             max_new_tokens, min_new_tokens, early_stopping, max_time,
                             repetition_penalty, num_return_sequences,
@@ -870,14 +899,36 @@ def main(
             assert 'gpt_langchain' not in sys.modules, "Dev bug, import of langchain when should not have"
             assert 'langchain' not in sys.modules, "Dev bug, import of langchain when should not have"
 
+    other_model_state_defaults = dict(load_8bit=load_8bit, load_4bit=load_4bit, low_bit_mode=low_bit_mode,
+                                      load_half=load_half,
+                                      load_gptq=load_gptq, load_exllama=load_exllama, use_safetensors=use_safetensors,
+                                      revision=revision, use_gpu_id=use_gpu_id, gpu_id=gpu_id,
+                                      compile_model=compile_model,
+                                      use_cache=use_cache,
+                                      llamacpp_dict=llamacpp_dict, model_path_llama=model_path_llama,
+                                      model_name_gptj=model_name_gptj,
+                                      model_name_gpt4all_llama=model_name_gpt4all_llama,
+                                      model_name_exllama_if_no_config=model_name_exllama_if_no_config,
+                                      )
     model_state_none = dict(model=None, tokenizer=None, device=None,
                             base_model=None, tokenizer_base_model=None, lora_weights=None,
-                            inference_server=None, prompt_type=None, prompt_dict=None)
+                            inference_server=None, prompt_type=None, prompt_dict=None,
+                            )
+    model_state_none.update(other_model_state_defaults)
     my_db_state0 = {LangChainMode.MY_DATA.value: [None, None, None]}
     selection_docs_state0 = dict(langchain_modes=langchain_modes,
                                  langchain_mode_paths=langchain_mode_paths,
                                  langchain_mode_types=langchain_mode_types)
     selection_docs_state = copy.deepcopy(selection_docs_state0)
+
+    if cli or not gradio:
+        # initial state for query prompt
+        model_name = base_model
+        pre_prompt_query, prompt_query, pre_prompt_summary, prompt_summary = \
+            get_langchain_prompts(pre_prompt_query, prompt_query,
+                             pre_prompt_summary, prompt_summary,
+                             model_name, inference_server,
+                             model_path_llama)
 
     if cli:
         from cli import run_cli
@@ -893,22 +944,48 @@ def main(
         model_states = []
         model_list = [dict(base_model=base_model, tokenizer_base_model=tokenizer_base_model, lora_weights=lora_weights,
                            inference_server=inference_server, prompt_type=prompt_type, prompt_dict=prompt_dict)]
+        model_list[0].update(other_model_state_defaults)
+        # FIXME: hyper per model, not about model loading
+        # for k in gen_hyper:
+        #     model_list[k] = locals()[k]
+
         model_list0 = copy.deepcopy(model_list)  # just strings, safe to deepcopy
         model_state0 = model_state_none.copy()
         assert len(model_state_none) == len(model_state0)
         if model_lock:
             model_list = model_lock
+        # do reverse, so first is default base_model etc., so some logic works in go_gradio() more easily
         for model_dict in reversed(model_list):
-            # do reverse, so first is default base_model etc., so some logic works in go_gradio() more easily
-            # handles defaults user didn't have to pass
-            model_dict['base_model'] = base_model1 = model_dict.get('base_model', '')
-            model_dict['tokenizer_base_model'] = tokenizer_base_model1 = model_dict.get('tokenizer_base_model', '')
-            model_dict['lora_weights'] = lora_weights1 = model_dict.get('lora_weights', '')
-            model_dict['inference_server'] = inference_server1 = model_dict.get('inference_server', '')
+            # handle defaults user didn't have to pass
+            # special defaults, ignore defaults for these if not specifically set, replace with ''
+            model_dict['base_model'] = model_dict.get('base_model', '')
+            model_dict['tokenizer_base_model'] = model_dict.get('tokenizer_base_model', '')
+            model_dict['lora_weights'] = model_dict.get('lora_weights', '')
+            model_dict['inference_server'] = model_dict.get('inference_server', '')
             prompt_type1 = model_dict.get('prompt_type', model_list0[0]['prompt_type'])  # don't use mutated value
+            # rest of generic defaults
+            for k in model_list0[0]:
+                if k not in model_dict:
+                    model_dict[k] = model_list0[0][k]
+
+            # begin prompt adjustments
+            # get query prompt for (say) last base model if using model lock
+            pre_prompt_query1, prompt_query1, pre_prompt_summary1, prompt_summary1 = (
+                get_langchain_prompts(pre_prompt_query, prompt_query,
+                                 pre_prompt_summary, prompt_summary,
+                                 model_dict['base_model'],
+                                 model_dict['inference_server'],
+                                 model_dict['model_path_llama']))
+            # if mixed setup, choose non-empty so best models best
+            # FIXME: Make per model dict passed through to evaluate
+            pre_prompt_query = pre_prompt_query or pre_prompt_query1
+            prompt_query = prompt_query or prompt_query1
+            pre_prompt_summary = pre_prompt_summary or pre_prompt_summary1
+            prompt_summary = prompt_summary or prompt_summary1
+
             # try to infer, ignore empty initial state leading to get_generate_params -> 'plain'
             if model_dict.get('prompt_type') is None:
-                model_lower1 = base_model1.lower()
+                model_lower1 = model_dict['base_model'].lower()
                 if model_lower1 in inv_prompt_type_to_model_lower:
                     prompt_type1 = inv_prompt_type_to_model_lower[model_lower1]
                     prompt_dict1, error0 = get_prompt(prompt_type1, '',
@@ -920,13 +997,15 @@ def main(
                 prompt_dict1 = prompt_dict
             model_dict['prompt_type'] = prompt_type1
             model_dict['prompt_dict'] = prompt_dict1 = model_dict.get('prompt_dict', prompt_dict1)
+            # end prompt adjustments
             all_kwargs = locals().copy()
-            all_kwargs.update(dict(base_model=base_model1, tokenizer_base_model=tokenizer_base_model1,
-                                   lora_weights=lora_weights1, inference_server=inference_server1))
-            if base_model1 and not login_mode_if_model0:
+            all_kwargs.update(model_dict)
+            if model_dict['base_model'] and not login_mode_if_model0:
                 model0, tokenizer0, device = get_model(reward_type=False,
                                                        **get_kwargs(get_model, exclude_names=['reward_type'],
                                                                     **all_kwargs))
+                # update to be consistent with what is passed from CLI and model chose
+                max_seq_len = tokenizer0.model_max_length
             else:
                 # if empty model, then don't load anything, just get gradio up
                 model0, tokenizer0, device = None, None, None
@@ -998,7 +1077,7 @@ def get_config(base_model,
             if raise_exception:
                 raise
             if 'not a local folder and is not a valid model identifier listed on' in str(
-                    e) or '404 Client Error' in str(e):
+                    e) or '404 Client Error' in str(e) or "couldn't connect" in str(e):
                 # e.g. llama, gpjt, etc.
                 # e.g. HF TGI but not model on HF or private etc.
                 if max_seq_len is None and base_model.lower() in non_hf_types:
@@ -1287,10 +1366,11 @@ def get_model(
 
     model_name_exllama_if_no_config = '' if not llamacpp_dict else llamacpp_dict.get('model_name_exllama_if_no_config',
                                                                                      '')
-    model_loader, tokenizer_loader = get_loaders(model_name=base_model, reward_type=reward_type, llama_type=llama_type,
-                                                 load_gptq=load_gptq, load_exllama=load_exllama, config=config,
-                                                 rope_scaling=rope_scaling, max_seq_len=max_seq_len,
-                                                 model_name_exllama_if_no_config=model_name_exllama_if_no_config)
+    model_loader, tokenizer_loader, conditional_type = (
+        get_loaders(model_name=base_model, reward_type=reward_type, llama_type=llama_type,
+                    load_gptq=load_gptq, load_exllama=load_exllama, config=config,
+                    rope_scaling=rope_scaling, max_seq_len=max_seq_len,
+                    model_name_exllama_if_no_config=model_name_exllama_if_no_config))
 
     tokenizer_kwargs = dict(local_files_only=local_files_only,
                             resume_download=resume_download,
@@ -1335,7 +1415,7 @@ def get_model(
             assert os.getenv('OPENAI_API_KEY'), "Set environment for OPENAI_API_KEY"
             # Don't return None, None for model, tokenizer so triggers
             # include small token cushion
-            tokenizer = FakeTokenizer(model_max_length=model_token_mapping[base_model] - 50)
+            max_seq_len = model_token_mapping[base_model]
         if inference_server.startswith('replicate'):
             assert len(inference_server.split(':')) >= 3, "Expected replicate:model string, got %s" % inference_server
             assert os.getenv('REPLICATE_API_TOKEN'), "Set environment for REPLICATE_API_TOKEN"
@@ -1347,9 +1427,9 @@ def get_model(
                     "Could not import replicate python package. "
                     "Please install it with `pip install replicate`."
                 )
-            # Don't return None, None for model, tokenizer so triggers
-            # include small token cushion
-            tokenizer = FakeTokenizer(model_max_length=max_seq_len - 50)
+        # Don't return None, None for model, tokenizer so triggers
+        # include small token cushion
+        tokenizer = FakeTokenizer(model_max_length=max_seq_len - 50)
         return inference_server, tokenizer, inference_server
     assert not inference_server, "Malformed inference_server=%s" % inference_server
     if base_model in non_hf_types:
@@ -1438,8 +1518,9 @@ def get_hf_model(load_8bit: bool = False,
         "Please choose a base model with --base_model (CLI) or load one from Models Tab (gradio)"
     )
 
-    model_loader, tokenizer_loader = get_loaders(model_name=base_model, reward_type=reward_type, llama_type=llama_type,
-                                                 load_gptq=load_gptq, load_exllama=load_exllama)
+    model_loader, tokenizer_loader, conditional_type = (
+        get_loaders(model_name=base_model, reward_type=reward_type, llama_type=llama_type,
+                    load_gptq=load_gptq, load_exllama=load_exllama))
 
     config, _, max_seq_len = get_config(base_model, return_model=False, raise_exception=True, **config_kwargs)
 
@@ -1605,6 +1686,10 @@ def get_hf_model(load_8bit: bool = False,
 
     set_model_max_len(max_seq_len, tokenizer, verbose=False, reward_type=reward_type)
 
+    # tell if conditional type
+    model.conditional_type = conditional_type
+    tokenizer.conditional_type = conditional_type
+
     return model, tokenizer, device
 
 
@@ -1638,7 +1723,7 @@ def pop_unused_model_kwargs(model_kwargs):
 def get_score_model(score_model: str = None,
                     load_8bit: bool = False,
                     load_4bit: bool = False,
-                    low_bit_mode = 1,
+                    low_bit_mode=1,
                     load_half: bool = True,
                     load_gptq: str = '',
                     load_exllama: bool = False,
@@ -1721,6 +1806,8 @@ def evaluate(
         chunk_size,
         document_subset,
         document_choice,
+        pre_prompt_query,
+        prompt_query,
         pre_prompt_summary,
         prompt_summary,
         system_prompt,
@@ -1755,6 +1842,7 @@ def evaluate(
         first_para=None,
         text_limit=None,
         show_accordions=None,
+        show_link_in_sources=None,
         verbose=False,
         cli=False,
         reverse_docs=True,
@@ -1976,6 +2064,7 @@ def evaluate(
                 first_para=first_para,
                 text_limit=text_limit,
                 show_accordions=show_accordions,
+                show_link_in_sources=show_link_in_sources,
 
                 # evaluate args items
                 query=instruction,
@@ -1992,6 +2081,8 @@ def evaluate(
                 top_k_docs=top_k_docs,
                 prompt_type=prompt_type,
                 prompt_dict=prompt_dict,
+                pre_prompt_query=pre_prompt_query,
+                prompt_query=prompt_query,
                 pre_prompt_summary=pre_prompt_summary,
                 prompt_summary=prompt_summary,
 
@@ -2352,7 +2443,7 @@ def evaluate(
         assert src_lang is not None
         tokenizer.src_lang = languages_covered()[src_lang]
 
-    stopping_criteria = get_stopping(prompt_type, prompt_dict, tokenizer, device,
+    stopping_criteria = get_stopping(prompt_type, prompt_dict, tokenizer, device, base_model,
                                      model_max_length=tokenizer.model_max_length)
 
     inputs = tokenizer(prompt, return_tensors="pt")
@@ -2364,7 +2455,7 @@ def evaluate(
     max_input_tokens = max(0, int(max_max_tokens - min_new_tokens))
     # NOTE: Don't limit up front due to max_new_tokens, let go up to max or reach max_max_tokens in stopping.py
     assert isinstance(max_input_tokens, int), "Bad type for max_input_tokens=%s %s" % (
-    max_input_tokens, type(max_input_tokens))
+        max_input_tokens, type(max_input_tokens))
     input_ids = input_ids[:, -max_input_tokens:]
     # required for falcon if multiple threads or asyncio accesses to model during generation
     if use_cache is None:
@@ -2380,10 +2471,20 @@ def evaluate(
                              remove_invalid_values=True,
                              use_cache=use_cache,
                              )
-    token_ids = ['eos_token_id', 'pad_token_id', 'bos_token_id', 'cls_token_id', 'sep_token_id']
-    for token_id in token_ids:
-        if hasattr(tokenizer, token_id) and getattr(tokenizer, token_id) is not None:
-            gen_config_kwargs.update({token_id: getattr(tokenizer, token_id)})
+    if True:
+        # unclear impact, some odd things going on inside
+        # leads to:
+        # The attention mask and the pad token id were not set. As a consequence, you may observe unexpected behavior. Please pass your input's `attention_mask` to obtain reliable results.
+        # Setting `pad_token_id` to `eos_token_id`:2 for open-end generation.
+        # or leads to:
+        # Using cls_token, but it is not set yet.
+        # Using mask_token, but it is not set yet.
+        # Using pad_token, but it is not set yet.
+        # Using sep_token, but it is not set yet.
+        token_ids = ['eos_token_id', 'pad_token_id', 'bos_token_id', 'cls_token_id', 'sep_token_id']
+        for token_id in token_ids:
+            if hasattr(tokenizer, token_id) and getattr(tokenizer, token_id) is not None:
+                gen_config_kwargs.update({token_id: getattr(tokenizer, token_id)})
     generation_config = GenerationConfig(**gen_config_kwargs)
 
     gen_kwargs = dict(input_ids=input_ids,
@@ -2414,16 +2515,12 @@ def evaluate(
     decoder = functools.partial(tokenizer.decode,
                                 **decoder_kwargs
                                 )
-    decoder_raw_kwargs = dict(skip_special_tokens=False,
-                              clean_up_tokenization_spaces=True)
-
-    decoder_raw = functools.partial(tokenizer.decode,
-                                    **decoder_raw_kwargs
-                                    )
-
     with torch.no_grad():
         have_lora_weights = lora_weights not in [no_lora_str, '', None]
         context_class_cast = NullContext if device == 'cpu' or have_lora_weights or device == 'mps' else torch.autocast
+        if t5_type(base_model):
+            # issues when casting to float16, can mess up t5 model, e.g. only when not streaming, or other odd behaviors
+            context_class_cast = NullContext
         with context_class_cast(device):
             # protection for gradio not keeping track of closed users,
             # else hit bitsandbytes lack of thread safety:
@@ -2433,44 +2530,23 @@ def evaluate(
             if verbose:
                 print('Pre-Generate: %s' % str(datetime.now()), flush=True)
             decoded_output = None
+            response = ''
             with context_class("generate.lock"):
                 if verbose:
                     print('Generate: %s' % str(datetime.now()), flush=True)
-                # decoded tokenized prompt can deviate from prompt due to special characters
-                inputs_decoded = decoder(input_ids[0])
-                inputs_decoded_raw = decoder_raw(input_ids[0])
-                if inputs_decoded == prompt:
-                    # normal
-                    pass
-                elif inputs_decoded.lstrip() == prompt.lstrip():
-                    # sometimes extra space in front, make prompt same for prompt removal
-                    prompt = inputs_decoded
-                elif inputs_decoded_raw == prompt:
-                    # some models specify special tokens that are part of normal prompt, so can't skip them
-                    inputs_decoded = prompt = inputs_decoded_raw
-                    decoder = decoder_raw
-                    decoder_kwargs = decoder_raw_kwargs
-                elif inputs_decoded_raw.replace("<unk> ", "").replace("<unk>", "").replace('\n', ' ').replace(' ',
-                                                                                                              '') == prompt.replace(
-                    '\n', ' ').replace(' ', ''):
-                    inputs_decoded = prompt = inputs_decoded_raw
-                    decoder = decoder_raw
-                    decoder_kwargs = decoder_raw_kwargs
-                else:
-                    if verbose:
-                        print("WARNING: Special characters in prompt", flush=True)
-                if stream_output:
-                    skip_prompt = False  # means first output has prompt too
+                always_use_streaming_method = True  # to deal with complex parsing of prompt vs. generation due to odd tokenizing
+                if stream_output or always_use_streaming_method:
+                    skip_prompt = True  # True means first output excludes prompt
                     streamer = H2OTextIteratorStreamer(tokenizer, skip_prompt=skip_prompt, block=False,
                                                        **decoder_kwargs)
                     gen_kwargs.update(dict(streamer=streamer))
                     target = wrapped_partial(generate_with_exceptions, model.generate,
-                                             prompt=prompt, inputs_decoded=inputs_decoded,
                                              raise_generate_gpu_exceptions=raise_generate_gpu_exceptions,
                                              **gen_kwargs)
                     bucket = queue.Queue()
                     thread = EThread(target=target, streamer=streamer, bucket=bucket)
                     thread.start()
+                    ret = dict(response='', sources='', save_dict=dict())
                     outputs = ""
                     sources = ''
                     try:
@@ -2478,9 +2554,14 @@ def evaluate(
                             if bucket.qsize() > 0 or thread.exc:
                                 thread.join()
                             outputs += new_text
-                            response = prompter.get_response(outputs, prompt=inputs_decoded,
+                            response = prompter.get_response(outputs, prompt=None,
+                                                             only_new_text=True,
                                                              sanitize_bot_response=sanitize_bot_response)
-                            yield dict(response=response, sources=sources, save_dict=dict())
+                            ret = dict(response=response, sources=sources, save_dict=dict())
+                            if stream_output:
+                                yield ret
+                        if not stream_output:
+                            yield ret
                     except BaseException:
                         # if any exception, raise that exception if was from thread, first
                         if thread.exc:
@@ -2497,15 +2578,19 @@ def evaluate(
                     decoded_output = outputs
                     ntokens = len(outputs) // 4  # hack for now
                 else:
+                    # below length removal doesn't work in general, because encoding does not match internal of model generation
+                    input_ids_len = gen_kwargs['input_ids'][0].shape[0]
                     try:
                         outputs = model.generate(**gen_kwargs)
                     finally:
                         pass
                         # don't clear torch cache here, delays multi-generation, and bot(), all_bot(), and evaluate_nochat() do it
-                    ntokens = sum([len(s) for s in outputs.sequences]) if save_dir else -1
-                    outputs = [decoder(s) for s in outputs.sequences]
+                    # skip first IDs
+                    ntokens = sum([len(s) - input_ids_len for s in outputs.sequences]) if save_dir else -1
+                    outputs = [decoder(s[input_ids_len:]) for s in outputs.sequences]
                     sources = ''
-                    response = prompter.get_response(outputs, prompt=inputs_decoded,
+                    response = prompter.get_response(outputs, prompt=None,
+                                                     only_new_text=True,
                                                      sanitize_bot_response=sanitize_bot_response)
                     yield dict(response=response, sources=sources, save_dict=dict())
                     if outputs and len(outputs) >= 1:
@@ -2632,19 +2717,21 @@ class H2OTextIteratorStreamer(TextIteratorStreamer):
             self.print_len += len(printable_text)
         # Otherwise, prints until the last space char (simple heuristic to avoid printing incomplete words,
         # which may change with the subsequent token -- there are probably smarter ways to do this!)
+        elif len(text) > 0 and text[-1] == '�':
+            printable_text = text[self.print_len: text.rfind(" ") + 1]
+            self.print_len += len(printable_text)
         else:
-            # printable_text = text[self.print_len : text.rfind(" ") + 1]
             printable_text = text[self.print_len:]
             self.print_len += len(printable_text)
 
         self.on_finalized_text(printable_text)
 
 
-def generate_with_exceptions(func, *args, prompt='', inputs_decoded='', raise_generate_gpu_exceptions=True, **kwargs):
+def generate_with_exceptions(func, *args, raise_generate_gpu_exceptions=True, **kwargs):
     try:
         func(*args, **kwargs)
     except torch.cuda.OutOfMemoryError as e:
-        print("GPU OOM 2: prompt: %s inputs_decoded: %s exception: %s" % (prompt, inputs_decoded, str(e)),
+        print("GPU OOM 2: exception: %s" % str(e),
               flush=True)
         if 'input_ids' in kwargs:
             if kwargs['input_ids'] is not None:
@@ -2660,7 +2747,7 @@ def generate_with_exceptions(func, *args, prompt='', inputs_decoded='', raise_ge
                 'cublasLt ran into an error!' in str(e) or \
                 'mat1 and mat2 shapes cannot be multiplied' in str(e):
             print(
-                "GPU Error: prompt: %s inputs_decoded: %s exception: %s" % (prompt, inputs_decoded, str(e)),
+                "GPU Error: exception: %s" % str(e),
                 flush=True)
             traceback.print_exc()
             clear_torch_cache()
@@ -2676,7 +2763,10 @@ def generate_with_exceptions(func, *args, prompt='', inputs_decoded='', raise_ge
 def get_generate_params(model_lower,
                         chat,
                         stream_output, show_examples,
-                        prompt_type, prompt_dict, system_prompt,
+                        prompt_type, prompt_dict,
+                        system_prompt,
+                        pre_prompt_query, prompt_query,
+                        pre_prompt_summary, prompt_summary,
                         temperature, top_p, top_k, num_beams,
                         max_new_tokens, min_new_tokens, early_stopping, max_time,
                         repetition_penalty, num_return_sequences,
@@ -2847,7 +2937,10 @@ y = np.random.randint(0, 1, 100)
     for example in examples:
         example += [chat, '', '', LangChainMode.DISABLED.value, True,
                     LangChainAction.QUERY.value, [],
-                    top_k_docs, chunk, chunk_size, DocumentSubset.Relevant.name, [], '', '', system_prompt
+                    top_k_docs, chunk, chunk_size, DocumentSubset.Relevant.name, [],
+                    pre_prompt_query, prompt_query,
+                    pre_prompt_summary, prompt_summary,
+                    system_prompt,
                     ]
         # adjust examples if non-chat mode
         if not chat:

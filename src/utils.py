@@ -7,6 +7,7 @@ import inspect
 import os
 import pathlib
 import pickle
+import platform
 import random
 import shutil
 import subprocess
@@ -25,6 +26,8 @@ import numpy as np
 import pandas as pd
 import requests
 import uuid
+
+import tabulate
 from fire import inspectutils
 from joblib import Parallel
 from tqdm.auto import tqdm
@@ -1101,7 +1104,8 @@ except (PackageNotFoundError, AssertionError):
 only_unstructured_urls = os.environ.get("ONLY_UNSTRUCTURED_URLS", "0") == "1"
 only_selenium = os.environ.get("ONLY_SELENIUM", "0") == "1"
 only_playwright = os.environ.get("ONLY_PLAYWRIGHT", "0") == "1"
-if not only_playwright:
+keep_playwright = os.environ.get("KEEP_PLAYWRIGHT", "0") == "1"
+if not only_playwright or keep_playwright:
     # disable, hangs too often
     have_playwright = False
 
@@ -1177,3 +1181,32 @@ def url_alive(url):
             return True
         else:
             return False
+
+
+def dict_to_html(x, small=True):
+    df = pd.DataFrame(x.items(), columns=['Key', 'Value'])
+    df.index = df.index + 1
+    df.index.name = 'index'
+    res = tabulate.tabulate(df, headers='keys', tablefmt='unsafehtml')
+    if small:
+        return "<small>" + res + "</small>"
+    else:
+        return res
+
+
+def text_to_html(x):
+    return """
+<style>
+      pre {
+        overflow-x: auto;
+        white-space: pre-wrap;
+        white-space: -moz-pre-wrap;
+        white-space: -pre-wrap;
+        white-space: -o-pre-wrap;
+        word-wrap: break-word;
+      }
+    </style>
+<pre>
+%s
+</pre>
+""" % x

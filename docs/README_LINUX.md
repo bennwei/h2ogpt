@@ -72,6 +72,8 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
     ```
 * Install document question-answer dependencies:
     ```bash
+    # May be required for jq package:
+    sudo apt-get install autoconf libtool
     # Required for Doc Q/A: LangChain:
     pip install -r reqs_optional/requirements_optional_langchain.txt
     # Required for CPU: LLaMa/GPT4All:
@@ -84,20 +86,20 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
     sudo apt-get install -y libmagic-dev poppler-utils tesseract-ocr libtesseract-dev libreoffice
     # Optional: for supporting unstructured package
     python -m nltk.downloader all
+    # Optional but required for PlayWright
+    playwright install --with-deps
 * GPU Optional: For AutoGPTQ support on x86_64 linux
     Try H2O.ai's pre-built wheel:
     ```bash
-    pip uninstall -y auto-gptq ; pip install https://s3.amazonaws.com/artifacts.h2o.ai/deps/h2ogpt/auto_gptq-0.3.0-cp310-cp310-linux_x86_64.whl --use-deprecated=legacy-resolver
+    pip uninstall -y auto-gptq ; pip install https://github.com/PanQiWei/AutoGPTQ/releases/download/v0.4.1/auto_gptq-0.4.1+cu117-cp310-cp310-linux_x86_64.whl
+    # in-transformers support of AutoGPTQ
+    pip install git+https://github.com/huggingface/optimum.git
     ```
     This avoids issues with missing cuda extensions etc.  if this does not apply to your system, run:
     ```bash
-    pip uninstall -y auto-gptq ; GITHUB_ACTIONS=true pip install auto-gptq==0.3.0 --no-cache-dir
+    pip uninstall -y auto-gptq ; GITHUB_ACTIONS=true pip install auto-gptq --extra-index-url https://huggingface.github.io/autogptq-index/whl/cu118/ --no-cache-dir
     ```
-   We recommend to install like the above in order to avoid warnings and inefficient memory usage. If one has trouble installing AutoGPTQ, can try:
-   ```bash
-   pip install https://github.com/PanQiWei/AutoGPTQ/releases/download/v0.3.0/auto_gptq-0.3.0+cu117-cp310-cp310-linux_x86_64.whl
-   ```
-    However, if one sees `CUDA extension not installed` in output after loading model, one needs to compile it, else will use double memory and be slower on GPU.
+    If one sees `CUDA extension not installed` in output after loading model, one needs to compile AutoGPTQ, else will use double memory and be slower on GPU.
     See [AutoGPTQ](README_GPU.md#autogptq) about running AutoGPT models.
 * GPU Optional: For exllama support on x86_64 linux
     ```bash

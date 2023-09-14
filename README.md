@@ -21,7 +21,7 @@ Query and summarize your documents or just chat with local private GPT LLMs usin
 - **Inference Servers** support (HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI)
 - **OpenAI-compliant Python client API** for client-server control
 - **Evaluate** performance using reward models
-- **Quality** maintained with over 300 unit and integration tests taking over 4 GPU-hours
+- **Quality** maintained with over 1000 unit and integration tests taking over 4 GPU-hours
 
 ### Getting Started
 
@@ -43,6 +43,7 @@ wget https://huggingface.co/TheBloke/Llama-2-7B-Chat-GGML/resolve/main/llama-2-7
 python generate.py --base_model='llama' --prompt_type=llama2
 ```
 then go to your browser by visiting [http://127.0.0.1:7860](http://127.0.0.1:7860) or [http://localhost:7860](http://localhost:7860).
+If encounter issues with llama-cpp-python or other packages that try to compile and fail, try binary wheels for your platform as linked in the detailed instructions below.
 
 ---
 
@@ -100,7 +101,7 @@ then go to your browser by visiting [http://127.0.0.1:7860](http://127.0.0.1:786
 
 ### Resources
 - [Discord](https://discord.gg/WKhYMWcVbq)
-- [Apache V2 models (Falcon 40, etc.) at 🤗](https://huggingface.co/h2oai/)
+- [Models (LLaMa-2, Falcon 40, etc.) at 🤗](https://huggingface.co/h2oai/)
 - [YouTube: 100% Offline ChatGPT Alternative?](https://www.youtube.com/watch?v=Coj72EzmX20)
 - [YouTube: Ultimate Open-Source LLM Showdown (6 Models Tested) - Surprising Results!](https://www.youtube.com/watch?v=FTm5C_vV_EY)
 - [YouTube: Blazing Fast Falcon 40b 🚀 Uncensored, Open-Source, Fully Hosted, Chat With Your Docs](https://www.youtube.com/watch?v=H8Dx-iUY49s)

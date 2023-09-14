@@ -121,6 +121,11 @@ class TextCompletionCreator:
         params["pre_prompt_summary"] = ""
         params["prompt_summary"] = ""
         params["system_prompt"] = ""
+        params["image_loaders"] = None
+        params["pdf_loaders"] = None
+        params["url_loaders"] = None
+        params["jq_schema"] = None
+        params["visible_models"] = None
         return TextCompletion(self._client, params)
 
 
@@ -240,7 +245,12 @@ class ChatCompletionCreator:
         params["prompt_query"] = ""
         params["pre_prompt_summary"] = ""
         params["prompt_summary"] = ""
-        params["chatbot"] = []  # chat history
+        params["image_loaders"] = None
+        params["pdf_loaders"] = None
+        params["url_loaders"] = None
+        params["jq_schema"] = None
+        params["visible_models"] = None
+        params["chatbot"] = []  # chat history (FIXME: Only works if 1 model?)
         return ChatCompletion(self._client, params)
 
 

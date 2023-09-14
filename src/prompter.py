@@ -23,12 +23,21 @@ prompt_type_to_model_name = {
         'gpt2',
         'distilgpt2',
         'mosaicml/mpt-7b-storywriter',
+        'tiiuae/falcon-7b',
+        'tiiuae/falcon-40b',
+        'tiiuae/falcon-180B',
         'meta-llama/Llama-2-7b',
         'meta-llama/Llama-2-13b',
         'meta-llama/Llama-2-70b',
         'h2oai/h2ogpt-4096-llama2-7b',
         'h2oai/h2ogpt-4096-llama2-13b',
         'h2oai/h2ogpt-4096-llama2-70b',
+        'h2oai/h2ogpt-16k-codellama-7b',
+        'h2oai/h2ogpt-16k-codellama-13b',
+        'h2oai/h2ogpt-16k-codellama-34b',
+        'h2oai/h2ogpt-16k-codellama-7b-python',
+        'h2oai/h2ogpt-16k-codellama-13b-python',
+        'h2oai/h2ogpt-16k-codellama-34b-python',
     ],
     'gptj': ['gptj', 'gpt4all_llama'],
     'prompt_answer': [
@@ -82,9 +91,9 @@ prompt_type_to_model_name = {
     # "wizard2": [],
     "mptinstruct": ['mosaicml/mpt-30b-instruct', 'mosaicml/mpt-7b-instruct', 'mosaicml/mpt-30b-instruct'],
     "mptchat": ['mosaicml/mpt-7b-chat', 'mosaicml/mpt-30b-chat', 'TheBloke/mpt-30B-chat-GGML'],
-    "vicuna11": ['lmsys/vicuna-33b-v1.3'],
+    "vicuna11": ['lmsys/vicuna-33b-v1.3', 'lmsys/vicuna-7b-v1.5', 'lmsys/vicuna-13b-v1.5'],
     "one_shot": ['lmsys/fastchat-t5-3b-v1.0'],
-    "falcon": ['tiiuae/falcon-40b-instruct', 'tiiuae/falcon-40b', 'tiiuae/falcon-7b-instruct', 'tiiuae/falcon-7b'],
+    "falcon": ['tiiuae/falcon-40b-instruct', 'tiiuae/falcon-7b-instruct'],
     "llama2": [
         'meta-llama/Llama-2-7b-chat-hf',
         'meta-llama/Llama-2-13b-chat-hf',
@@ -95,12 +104,19 @@ prompt_type_to_model_name = {
         'h2oai/h2ogpt-oasst1-4096-llama2-70b',
         'llama',
         'TheBloke/Llama-2-7b-Chat-GPTQ',
+        'TheBloke/Llama-2-7b-chat-fp16',
+        'TheBloke/Llama-2-13b-chat-fp16',
+        'TheBloke/Llama-2-70b-chat-fp16',
         'h2oai/h2ogpt-4096-llama2-7b-chat',
         'h2oai/h2ogpt-4096-llama2-13b-chat',
         'h2oai/h2ogpt-4096-llama2-70b-chat',
+        'h2oai/h2ogpt-16k-codellama-7b-instruct',
+        'h2oai/h2ogpt-16k-codellama-13b-instruct',
+        'h2oai/h2ogpt-16k-codellama-34b-instruct',
     ],
-    "beluga": ['stabilityai/StableBeluga2'],
+    "beluga": ['stabilityai/StableBeluga2', 'psmathur/orca_mini_v3_7b'],
     "wizard3nospace": ['WizardLM/WizardLM-13B-V1.2'],
+    "falcon_chat": ['tiiuae/falcon-180B-chat'],
     # could be plain, but default is correct prompt_type for default TheBloke model ggml-wizardLM-7B.q4_2.bin
 }
 if os.getenv('OPENAI_API_KEY'):
@@ -705,6 +721,26 @@ Remember to tailor the activities to the birthday child's interests and preferen
         chat_turn_sep = chat_sep = '\n'
         humanstr = PreInstruct
         botstr = PreResponse
+    elif prompt_type in [PromptType.falcon_chat.value, str(PromptType.falcon_chat.value),
+                         PromptType.falcon_chat.name]:
+
+        if use_system_prompt and not (chat and reduced):
+            # too much safety, hurts accuracy
+            sys_msg = "System: You are an intelligent and helpful assistant.\n"
+            promptA = promptB = sys_msg
+        else:
+            promptA = promptB = ''
+        PreInstruct = """User: """
+        PreInput = None
+        PreResponse = """Falcon:"""
+        terminate_response = ['\nUser:', "<|endoftext|>", " User:", "###"]
+        chat_sep = '\n'
+        chat_turn_sep = '\n'
+        humanstr = PreInstruct
+        botstr = PreResponse
+        if making_context:
+            # when making context, want it to appear as-if LLM generated, which starts with space after :
+            PreResponse = botstr + ' '
     else:
         raise RuntimeError("No such prompt_type=%s" % prompt_type)
 

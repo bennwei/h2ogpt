@@ -12,13 +12,28 @@ def get_css(kwargs) -> str:
 
 
 def make_css_base() -> str:
-    css1 = """
-        #col_container {margin-left: auto; margin-right: auto; text-align: left;}
-        """
-    return css1 + """
+    return """
+    #col_container {margin-left: auto; margin-right: auto; text-align: left;}
+
     @import url('https://fonts.googleapis.com/css2?family=Source+Sans+Pro:wght@400;600&display=swap');
     
     body.dark{#warning {background-color: #555555};}
+    
+    #sidebar {
+        order: 1;
+        
+        @media (max-width: 463px) {
+          order: 2;
+        }
+    }
+    
+    #col-tabs {
+        order: 2;
+        
+        @media (max-width: 463px) {
+          order: 1;
+        }
+    }
     
     #small_btn {
         margin: 0.6em 0em 0.55em 0;
@@ -70,5 +85,71 @@ def make_css_base() -> str:
     div.message.bot > div.icon-button {
         top: unset;
         bottom: 0;
+    }
+    
+    #prompt-form-row {
+        position: relative;
+    }
+    
+    #attach-button {
+        position: absolute;
+        top: 45px;
+        right: 20px;
+        
+        display: flex;
+        justify-content: center;
+        border: 1px solid var(--primary-500) !important;
+        
+        @media (max-width: 463px) {
+          width: 56px;
+        }
+    }
+    
+    #attach-button > img {
+        margin-right: 0;
+    }
+    
+    #prompt-form > label > textarea {
+        padding-right: 104px;
+        
+        @media (max-width: 463px) {
+          min-height: 94px;
+          padding-right: 70px;
+        }
+    }
+    
+    #header-links {
+        float: left;
+        justify-content: left;
+        height: 80px;
+        width: 195px;
+        margin-top: 0px;
+    }
+    
+    #main-logo {
+        display: flex;
+        justify-content: center;
+        margin-bottom: 30px;
+        margin-right: 330px;
+        
+        @media (max-width: 463px) {
+          justify-content: flex-end;
+          margin-right: 0;
+          margin-bottom: 0;
+        }
+    }
+    
+    #visible-models > label > div.wrap > div.wrap-inner > div.secondary-wrap > div.remove-all {
+        display: none !important;
+    }
+    
+    #visible-models > label > div.wrap > div.wrap-inner > div.token {
+        display: none !important;
+    }
+    
+    #visible-models > label > div.wrap > div.wrap-inner > div.secondary-wrap::before {
+        content: "Select";
+        padding: 0 4px;
+        margin-right: 2px;
     }
     """

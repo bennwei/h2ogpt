@@ -134,7 +134,7 @@ One can run an inference server in one docker and h2oGPT in another docker.
 
 For the vLLM server running on 2 GPUs using h2oai/h2ogpt-4096-llama2-7b-chat model, run:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime
+docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0
 unset CUDA_VISIBLE_DEVICES
 mkdir -p $HOME/.cache/huggingface/hub
 mkdir -p $HOME/save
@@ -142,17 +142,16 @@ docker run \
     --runtime=nvidia \
     --gpus '"device=0,1"' \
     --shm-size=10.24gb \
-    -e TRANSFORMERS_CACHE="/.cache/" \
     -p 5000:5000 \
     --rm --init \
-    --entrypoint /h2ogpt_conda/envs/vllm/bin/python3.10 \
+    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v $HOME/.cache:/.cache \
+    -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    h2ogpt -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
         --port=5000 \
         --host=0.0.0.0 \
         --model=h2oai/h2ogpt-4096-llama2-7b-chat \
@@ -160,7 +159,7 @@ docker run \
         --tensor-parallel-size=2 \
         --seed 1234 \
         --trust-remote-code \
-        --download-dir=/.cache/huggingface/hub &>> logs.vllm_server.txt
+        --download-dir=/workspace/.cache/huggingface/hub &>> logs.vllm_server.txt
 ```
 Use `docker run -d` to run in detached background.
 
@@ -229,7 +228,7 @@ docker run \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     -v "${HOME}"/save:/workspace/save \
-    h2ogpt /workspace/generate.py \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 /workspace/generate.py \
         --inference_server="vllm:0.0.0.0:5000" \
         --base_model=h2oai/h2ogpt-4096-llama2-7b-chat \
         --langchain_mode=UserData
@@ -253,9 +252,7 @@ docker run -d --gpus all \
        --shm-size 1g \
        --network host \
        -e CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES \
-       -e TRANSFORMERS_CACHE="/.cache/" \
        -p 6112:80 \
-       -v $HOME/.cache:/.cache/ \
        -v $HOME/.cache/huggingface/hub/:/data ghcr.io/huggingface/text-generation-inference:0.9.3 \
        --model-id $MODEL \
        --max-input-length 4096 \
@@ -266,13 +263,12 @@ Each docker can run on any system where network can reach or on same system on d
 
 One a low-memory GPU system can add other options to limit batching, e.g.:
 ```bash
+mkdir -p $HOME/.cache/huggingface/hub/
 export MODEL=h2oai/h2ogpt-4096-llama2-7b-chat
 unset CUDA_VISIBLE_DEVICES
 docker run -d --gpus '"device=0"' \
         --shm-size 1g \
-        -e TRANSFORMERS_CACHE="/.cache/" \
         -p 6112:80 \
-        -v $HOME/.cache:/.cache/ \
         -v $HOME/.cache/huggingface/hub/:/data ghcr.io/huggingface/text-generation-inference:0.9.3 \
         --model-id $MODEL \
         --max-input-length 1024 \
@@ -309,7 +305,7 @@ docker run -d \
           --use_gpu_id=False \
           --score_model=None \
           --max_max_new_tokens=4096 \
-          --max_new_tokens=1024 \
+          --max_new_tokens=1024
 ```
 or change `max_max_new_tokens` to `2048` for low-memory case.  Note the h2oGPT container has `--network host` with same port inside and outside so the other container on same host can see it.  Otherwise use actual IP addersses if on separate hosts.
 
@@ -383,6 +379,7 @@ For a more detailed description of other parameters of the make_db script, check
 
 ```bash
 # build image
+make docker_build_deps
 touch build_info.txt
 docker build -t h2ogpt .
 ```

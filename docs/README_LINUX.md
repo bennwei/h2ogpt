@@ -84,6 +84,11 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
     pip install -r reqs_optional/requirements_optional_langchain.urls.txt
     # Optional: support docx, pptx, ArXiv, etc. required by some python packages
     sudo apt-get install -y libmagic-dev poppler-utils tesseract-ocr libtesseract-dev libreoffice
+    # Improved OCR with DocTR:
+    conda install -c conda-forge pygobject
+    pip install -r reqs_optional/requirements_optional_doctr.txt
+    # go back to older onnx so Tesseract OCR still works
+    pip install onnxruntime==1.15.0 onnxruntime-gpu==1.15.0
     # Optional: for supporting unstructured package
     python -m nltk.downloader all
     # Optional but required for PlayWright
@@ -91,7 +96,7 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
 * GPU Optional: For AutoGPTQ support on x86_64 linux
     Try H2O.ai's pre-built wheel:
     ```bash
-    pip uninstall -y auto-gptq ; pip install https://github.com/PanQiWei/AutoGPTQ/releases/download/v0.4.1/auto_gptq-0.4.1+cu117-cp310-cp310-linux_x86_64.whl
+    pip uninstall -y auto-gptq ; pip install https://github.com/PanQiWei/AutoGPTQ/releases/download/v0.4.2/auto_gptq-0.4.2+cu118-cp310-cp310-linux_x86_64.whl
     # in-transformers support of AutoGPTQ
     pip install git+https://github.com/huggingface/optimum.git
     ```
@@ -103,7 +108,7 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
     See [AutoGPTQ](README_GPU.md#autogptq) about running AutoGPT models.
 * GPU Optional: For exllama support on x86_64 linux
     ```bash
-    pip uninstall -y exllama ; pip install https://github.com/jllllll/exllama/releases/download/0.0.8/exllama-0.0.8+cu118-cp310-cp310-linux_x86_64.whl --no-cache-dir
+    pip uninstall -y exllama ; pip install https://github.com/jllllll/exllama/releases/download/0.0.13/exllama-0.0.13+cu118-cp310-cp310-linux_x86_64.whl --no-cache-dir
     ```
     See [exllama](README_GPU.md#exllama) about running exllama models.
 
@@ -111,7 +116,10 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
   * Download/Install [CUDA llama-cpp-python wheel](https://github.com/jllllll/llama-cpp-python-cuBLAS-wheels), E.g.:
     ```bash
     pip uninstall -y llama-cpp-python llama-cpp-python-cuda
+    # GGMLv3 ONLY:
     pip install https://github.com/jllllll/llama-cpp-python-cuBLAS-wheels/releases/download/textgen-webui/llama_cpp_python_cuda-0.1.73+cu117-cp310-cp310-linux_x86_64.whl
+    # GGUF ONLY:
+    pip install https://github.com/jllllll/llama-cpp-python-cuBLAS-wheels/releases/download/textgen-webui/llama_cpp_python_cuda-0.1.83+cu117-cp310-cp310-linux_x86_64.whl
     ```
   * If any issues, then must compile llama-cpp-python with CUDA support:
    ```bash
@@ -131,6 +139,12 @@ These instructions are for Ubuntu x86_64 (other linux would be similar with diff
   * For LLaMa2, can set `max_tokens` to a larger value for longer output.
   * If one sees `/usr/bin/nvcc` mentioned in errors, that file needs to be removed as would likely conflict with version installed for conda.  
   * Note that once `llama-cpp-python` is compiled to support CUDA, it no longer works for CPU mode, so one would have to reinstall it without the above options to recovers CPU mode or have a separate h2oGPT env for CPU mode.
+
+* Control Core Count for chroma < 0.4 using chromamigdb package:
+    * Duckdb used by Chroma < 0.4 uses DuckDB 0.8.1 that has no control over number of threads per database, `import duckdb` leads to all virtual cores as threads and each db consumes another number of threads equal to virtual cores.  To prevent this, one can rebuild duckdb using [this modification](https://github.com/h2oai/duckdb/commit/dcd8c1ffc53dd020623630efb99ba6a3a4cbc5ad) or one can try to use the prebuild wheel for x86_64 built on Ubuntu 20.
+        ```bash
+        pip install https://h2o-release.s3.amazonaws.com/h2ogpt/duckdb-0.8.2.dev4025%2Bg9698e9e6a8.d20230907-cp310-cp310-linux_x86_64.whl --no-cache-dir --force-reinstall --no-deps
+      ```
 
 ### Compile Install Issues
   * `/usr/local/cuda/include/crt/host_config.h:132:2: error: #error -- unsupported GNU version! gcc versions later than 11 are not supported!`

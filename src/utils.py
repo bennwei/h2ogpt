@@ -7,7 +7,6 @@ import inspect
 import os
 import pathlib
 import pickle
-import platform
 import random
 import shutil
 import subprocess
@@ -616,6 +615,14 @@ def download(url, dest=None, dest_path=None):
     return dest
 
 
+def get_doc(x):
+    return x.page_content
+
+
+def get_source(x):
+    return x.metadata.get('source', "UNKNOWN SOURCE")
+
+
 def get_accordion(x, font_size=2, head_acc=50):
     title = x.page_content[:head_acc].replace("\n", ' ').replace("<br>", ' ').replace("<p>", ' ').replace("\r", ' ')
     content = x.page_content
@@ -959,6 +966,13 @@ try:
 except (PackageNotFoundError, AssertionError):
     pass
 
+have_chromamigdb = False
+try:
+    assert distribution('chromamigdb') is not None
+    have_chromamigdb = True
+except (PackageNotFoundError, AssertionError):
+    pass
+
 
 def hash_file(file):
     try:
@@ -1066,6 +1080,12 @@ import distutils.spawn
 
 have_tesseract = distutils.spawn.find_executable("tesseract")
 have_libreoffice = distutils.spawn.find_executable("libreoffice")
+try:
+    from weasyprint import HTML
+    import doctr
+    have_doctr = True
+except:
+    have_doctr = False
 
 try:
     assert distribution('arxiv') is not None
@@ -1182,18 +1202,23 @@ def url_alive(url):
             return False
 
 
-def dict_to_html(x, small=True):
+def dict_to_html(x, small=True, api=False):
     df = pd.DataFrame(x.items(), columns=['Key', 'Value'])
     df.index = df.index + 1
     df.index.name = 'index'
-    res = tabulate.tabulate(df, headers='keys', tablefmt='unsafehtml')
-    if small:
-        return "<small>" + res + "</small>"
+    if api:
+        return tabulate.tabulate(df, headers='keys')
     else:
-        return res
+        res = tabulate.tabulate(df, headers='keys', tablefmt='unsafehtml')
+        if small:
+            return "<small>" + res + "</small>"
+        else:
+            return res
 
 
-def text_to_html(x):
+def text_to_html(x, api=False):
+    if api:
+        return x
     return """
 <style>
       pre {
@@ -1217,30 +1242,39 @@ def lg_to_gr(
     # translate:
     import torch
     n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
-    n_gpus, gpu_ids = cuda_vis_check(n_gpus)
+    n_gpus, _ = cuda_vis_check(n_gpus)
+
+    image_loaders_options = ['Caption']
     if n_gpus != 0:
-        image_loaders_options = ['Caption', 'CaptionBlip2']
-    else:
-        image_loaders_options = []
+        image_loaders_options.extend(['CaptionBlip2', 'Pix2Struct'])
     if have_tesseract:
         image_loaders_options.append('OCR')
+    if have_doctr:
+        image_loaders_options.append('DocTR')
+
     image_loaders_options0 = []
     if have_tesseract and kwargs['enable_ocr']:
         image_loaders_options0.append('OCR')
+    if have_doctr and kwargs['enable_doctr']:
+        image_loaders_options0.append('DocTR')
     if kwargs['enable_captions']:
-        if kwargs['max_quality']:
+        if kwargs['max_quality'] and n_gpus > 0:
+            # BLIP2 only on GPU
             image_loaders_options0.append('CaptionBlip2')
         else:
             image_loaders_options0.append('Caption')
-    assert len(set(image_loaders_options0).difference(image_loaders_options)) == 0
 
     pdf_loaders_options = ['PyMuPDF', 'Unstructured', 'PyPDF', 'TryHTML']
     if have_tesseract:
         pdf_loaders_options.append('OCR')
+    if have_doctr:
+        pdf_loaders_options.append('DocTR')
+
     pdf_loaders_options0 = ['PyMuPDF']
-    assert len(set(pdf_loaders_options0).difference(pdf_loaders_options)) == 0
     if kwargs['enable_pdf_ocr'] == 'on':
         pdf_loaders_options0.append('OCR')
+    if have_doctr and kwargs['enable_pdf_doctr']:
+        pdf_loaders_options0.append('DocTR')
 
     url_loaders_options = []
     if only_unstructured_urls:
@@ -1256,7 +1290,10 @@ def lg_to_gr(
         if have_playwright:
             url_loaders_options.append('PlayWright')
     url_loaders_options0 = [url_loaders_options[0]]
-    assert len(set(url_loaders_options0).difference(url_loaders_options)) == 0
+    
+    assert set(image_loaders_options0).issubset(image_loaders_options)
+    assert set(pdf_loaders_options0).issubset(pdf_loaders_options)
+    assert set(url_loaders_options0).issubset(url_loaders_options)
 
     return image_loaders_options0, image_loaders_options, \
         pdf_loaders_options0, pdf_loaders_options, \

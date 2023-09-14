@@ -25,9 +25,12 @@ def glob_to_db(user_path, chunk=True, chunk_size=512, verbose=False,
                use_pypdf=False,
                enable_pdf_ocr='auto',
                try_pdf_as_html=True,
+               enable_pdf_doctr=False,
 
                # images
                enable_ocr=False,
+               enable_doctr=False,
+               enable_pix2struct=False,
                enable_captions=True,
                captions_model=None,
                caption_loader=None,
@@ -54,9 +57,12 @@ def glob_to_db(user_path, chunk=True, chunk_size=512, verbose=False,
                             use_pypdf=use_pypdf,
                             enable_pdf_ocr=enable_pdf_ocr,
                             try_pdf_as_html=try_pdf_as_html,
+                            enable_pdf_doctr=enable_pdf_doctr,
 
                             # images
                             enable_ocr=enable_ocr,
+                            enable_doctr=enable_doctr,
+                            enable_pix2struct=enable_pix2struct,
                             enable_captions=enable_captions,
                             captions_model=captions_model,
                             caption_loader=caption_loader,
@@ -73,6 +79,7 @@ def glob_to_db(user_path, chunk=True, chunk_size=512, verbose=False,
 def make_db_main(use_openai_embedding: bool = False,
                  hf_embedding_model: str = None,
                  migrate_embedding_model=False,
+                 auto_migrate_db=False,
                  persist_directory: str = None,
                  user_path: str = 'user_path',
                  langchain_type: str = 'shared',
@@ -100,20 +107,25 @@ def make_db_main(use_openai_embedding: bool = False,
                  use_pypdf=False,
                  enable_pdf_ocr='auto',
                  try_pdf_as_html=True,
+                 enable_pdf_doctr=False,
 
                  # images
                  enable_ocr=False,
+                 enable_doctr=False,
+                 enable_pix2struct=False,
                  enable_captions=True,
                  captions_model: str = "Salesforce/blip-image-captioning-base",
+                 pre_load_caption_model: bool = False,
+                 caption_gpu: bool = True,
                  # caption_loader=None,  # set internally
+                 # doctr_loader=None,  #  unused
 
                  # json
                  jq_schema='.[]',
 
-                 pre_load_caption_model: bool = False,
-                 caption_gpu: bool = True,
                  db_type: str = 'chroma',
                  selected_file_types: Union[List[str], str] = None,
+                 fail_if_no_sources: bool = True
                  ):
     """
     # To make UserData db for generate.py, put pdfs, etc. into path user_path and run:
@@ -136,6 +148,7 @@ def make_db_main(use_openai_embedding: bool = False,
     :param use_openai_embedding: Whether to use OpenAI embedding
     :param hf_embedding_model: HF embedding model to use. Like generate.py, uses 'hkunlp/instructor-large' if have GPUs, else "sentence-transformers/all-MiniLM-L6-v2"
     :param migrate_embedding_model: whether to migrate to newly chosen hf_embedding_model or stick with one in db
+    :param auto_migrate_db: whether to migrate database for chroma<0.4 -> >0.4
     :param persist_directory: where to persist db (note generate.py always uses db_dir_<collection name>
            If making personal database for user, set persistent_directory to users/<username>/db_dir_<collection name>
            and pass --langchain_type=personal
@@ -153,12 +166,26 @@ def make_db_main(use_openai_embedding: bool = False,
     :param download_one: whether to download one chosen example databases from h2o.ai HF
     :param download_dest: Destination for downloads
     :param n_jobs: Number of cores to use for ingesting multiple files
+
+    :param use_unstructured: see gen.py
+    :param use_playwright: see gen.py
+    :param use_selenium: see gen.py
+
+    :param use_pymupdf: see gen.py
+    :param use_unstructured_pdf: see gen.py
+    :param use_pypdf: see gen.py
+    :param enable_pdf_ocr: see gen.py
+    :param try_pdf_as_html: see gen.py
+    :param enable_pdf_doctr: see gen.py
+
+    :param enable_ocr: see gen.py
+    :param enable_doctr: see gen.py
+    :param enable_pix2struct: see gen.py
     :param enable_captions: Whether to enable captions on images
     :param captions_model: See generate.py
     :param pre_load_caption_model: See generate.py
     :param caption_gpu: Caption images on GPU if present
-    :param enable_ocr: Whether to enable OCR on images
-    :param enable_pdf_ocr: 'auto' uses OCR on PDFs as backup, good to handle image PDFs
+
     :param db_type: Type of db to create. Currently only 'chroma' and 'weaviate' is supported.
     :param selected_file_types: File types (by extension) to include if passing user_path
        For a list of possible values, see:
@@ -240,12 +267,16 @@ def make_db_main(use_openai_embedding: bool = False,
                          use_pypdf=use_pypdf,
                          enable_pdf_ocr=enable_pdf_ocr,
                          try_pdf_as_html=try_pdf_as_html,
+                         enable_pdf_doctr=enable_pdf_doctr,
 
                          # images
                          enable_ocr=enable_ocr,
+                         enable_doctr=enable_doctr,
+                         enable_pix2struct=enable_pix2struct,
                          enable_captions=enable_captions,
                          captions_model=captions_model,
                          caption_loader=caption_loader,
+                         # Note: we don't reload doctr model
 
                          # json
                          jq_schema=jq_schema,
@@ -257,13 +288,14 @@ def make_db_main(use_openai_embedding: bool = False,
     print("Exceptions: %s/%s %s" % (len(exceptions), len(sources), exceptions), flush=True)
     sources = [x for x in sources if 'exception' not in x.metadata]
 
-    assert len(sources) > 0, "No sources found"
+    assert len(sources) > 0 or not fail_if_no_sources, "No sources found"
     db = create_or_update_db(db_type, persist_directory,
                              collection_name, user_path, langchain_type,
                              sources, use_openai_embedding, add_if_exists, verbose,
-                             hf_embedding_model, migrate_embedding_model)
+                             hf_embedding_model, migrate_embedding_model, auto_migrate_db,
+                             n_jobs=n_jobs)
 
-    assert db is not None
+    assert db is not None or not fail_if_no_sources
     if verbose:
         print("DONE", flush=True)
     return db, collection_name

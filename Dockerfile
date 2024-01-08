@@ -9,12 +9,15 @@ ARG PATH="/h2ogpt_conda/bin:${PATH}"
 ENV HOME=/workspace
 ENV CUDA_HOME=/usr/local/cuda-11.8
 ENV VLLM_CACHE=/workspace/.vllm_cache
+ENV TIKTOKEN_CACHE_DIR=/workspace/tiktoken_cache
 
 WORKDIR /workspace
-RUN mkdir -p /workspace && chmod -R a+rwx /workspace
 
 COPY . /workspace/
+
 RUN cd /workspace && ./docker_build_script_ubuntu.sh
+
+RUN chmod -R a+rwx /workspace
 
 ARG user=h2ogpt
 ARG group=h2ogpt

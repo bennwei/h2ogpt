@@ -39,7 +39,6 @@ Dockerfile_deps
 # virtual envs
 venv
 
-.direnv
-db_dir_UserData_**
-locks/
-sources_dir/
+# Mac one click installer
+Tesseract-OCR/
+poppler/

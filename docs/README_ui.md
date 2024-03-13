@@ -182,9 +182,17 @@ Control model, LORA, or inference server used.
 
 ![ui_9.png](ui_9.png)
 
-To unload a model, click unload or "Choose Model" and select "[None/Remove]".
+If have inference server, add it, and click on **Load Model Names from Server** to populate the list of models with those on the server, which works for OpenAI, vLLM, oLLaMa, Google, MistralAI, Gradio inference servers.
 
-**Important**: Unloading only works properly if did not pre-load model with `--base_model` and only selected model and clicked load.
+See [Example Inference Servers](FAQ.md#running-inference-servers) for examples of what to put in server text box in UI.
+
+After (automatically or manually) populating the model names, go with the one selected or choose another in the dropdown that is on the server.
+
+To load the model state, click **Load (Download) Model**.
+
+To unload a model, click **Unload Model** or "Choose Model" and select "[]".
+
+**Important**: For local models (no inference server), unloading only works properly if did not pre-load model with `--base_model` and only selected model and clicked load.
 
 Note: Compare Mode uses memory for both models, and currently streaming is done for each instead of simultaneously.
 

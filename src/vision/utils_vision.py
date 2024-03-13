@@ -1,8 +1,12 @@
 import base64
+import os
+import time
+import uuid
 from io import BytesIO
+import numpy as np
 
 
-def png_to_base64(image_file):
+def img_to_base64(image_file):
     # assert image_file.lower().endswith('jpg') or image_file.lower().endswith('jpeg')
     from PIL import Image
 
@@ -36,14 +40,42 @@ def png_to_base64(image_file):
     return img_str
 
 
-def get_llava_response(file, llava_model,
-                       prompt=None,
-                       image_model='llava-v1.5-13b', temperature=0.2,
-                       top_p=0.7, max_new_tokens=512):
-    if prompt in ['auto', None]:
-        prompt = "Describe the image and what does the image say?"
-    # prompt = "According to the image, describe the image in full details with a well-structured response."
+def base64_to_img(img_str, output_path):
+    # Split the string on "," to separate the metadata from the base64 data
+    meta, base64_data = img_str.split(",", 1)
+    # Extract the format from the metadata
+    img_format = meta.split(';')[0].split('/')[-1]
+    # Decode the base64 string to bytes
+    img_bytes = base64.b64decode(base64_data)
+    # Create output file path with the correct format extension
+    output_file = f"{output_path}.{img_format}"
+    # Write the bytes to a file
+    with open(output_file, "wb") as f:
+        f.write(img_bytes)
+    print(f"Image saved to {output_file} with format {img_format}")
+    return output_file
 
+
+def fix_llava_prompt(file, prompt, allow_prompt_auto=True):
+    if prompt in ['auto', None] and allow_prompt_auto:
+        prompt = "Describe the image and what does the image say?"
+        # prompt = "According to the image, describe the image in full details with a well-structured response."
+        if file in ['', None]:
+            # let model handle if no prompt and no file
+            prompt = ''
+    # allow prompt = '', will describe image by default
+    if prompt is None:
+        if os.environ.get('HARD_ASSERTS'):
+            raise ValueError('prompt is None')
+        else:
+            prompt = ''
+    return prompt
+
+
+def llava_prep(file,
+               llava_model,
+               image_model='llava-v1.6-vicuna-13b',
+               client=None):
     prefix = ''
     if llava_model.startswith('http://'):
         prefix = 'http://'
@@ -65,26 +97,133 @@ def get_llava_response(file, llava_model,
     # add back prefix
     llava_model = prefix + llava_model
 
-    img_str = png_to_base64(file)
+    if client is None:
+        from gradio_utils.grclient import GradioClient
+        client = GradioClient(llava_model, check_hash=False, serialize=True)
+        client.setup()
 
-    from gradio_client import Client
-    client = Client(llava_model, serialize=False)
-    load_res = client.predict(api_name='/demo_load')
-    model_options = [x[1] for x in load_res['choices']]
-    assert len(model_options), "LLaVa endpoint has no models: %s" % str(load_res)
+    assert image_model, "No image model specified"
 
-    # if no default choice or default choice not there, choose first
-    if not image_model or image_model not in model_options:
-        image_model = model_options[0]
+    if isinstance(file, np.ndarray):
+        from PIL import Image
+        im = Image.fromarray(file)
+        file = "%s.jpeg" % str(uuid.uuid4())
+        im.save(file)
 
-    # test_file_local, test_file_server = client.predict(file_to_upload, api_name='/upload_api')
+    return image_model, client, file
 
-    image_process_mode = "Default"
-    include_image = False
-    res1 = client.predict(prompt, img_str, image_process_mode, include_image, api_name='/textbox_api_btn')
 
-    model_selector, temperature, top_p, max_output_tokens = image_model, temperature, top_p, max_new_tokens
-    res = client.predict(model_selector, temperature, top_p, max_output_tokens, include_image,
+def get_llava_response(file=None,
+                       llava_model=None,
+                       prompt=None,
+                       chat_conversation=[],
+                       allow_prompt_auto=False,
+                       image_model='llava-v1.6-vicuna-13b', temperature=0.2,
+                       top_p=0.7, max_new_tokens=512,
+                       image_process_mode="Default",
+                       include_image=False,
+                       client=None,
+                       max_time=None,
+                       force_stream=True,
+                       ):
+    kwargs = locals()
+
+    if force_stream:
+        text = ''
+        for res in get_llava_stream(**kwargs):
+            text = res
+        return text, prompt
+
+    prompt = fix_llava_prompt(file, prompt, allow_prompt_auto=allow_prompt_auto)
+
+    image_model, client, file = \
+        llava_prep(file, llava_model,
+                   image_model=image_model,
+                   client=client)
+
+    res = client.predict(prompt,
+                         chat_conversation,
+                         file,
+                         image_process_mode,
+                         include_image,
+                         image_model,
+                         temperature,
+                         top_p,
+                         max_new_tokens,
                          api_name='/textbox_api_submit')
     res = res[-1][-1]
     return res, prompt
+
+
+def get_llava_stream(file, llava_model,
+                     prompt=None,
+                     chat_conversation=[],
+                     allow_prompt_auto=False,
+                     image_model='llava-v1.6-vicuna-13b', temperature=0.2,
+                     top_p=0.7, max_new_tokens=512,
+                     image_process_mode="Default",
+                     include_image=False,
+                     client=None,
+                     verbose_level=0,
+                     max_time=None,
+                     force_stream=True,  # dummy arg
+                     ):
+    image_model = os.path.basename(image_model)  # in case passed HF link
+
+    prompt = fix_llava_prompt(file, prompt, allow_prompt_auto=allow_prompt_auto)
+
+    image_model, client, file = \
+        llava_prep(file, llava_model,
+                   image_model=image_model,
+                   client=client)
+
+    job = client.submit(prompt,
+                        chat_conversation,
+                        file,
+                        image_process_mode,
+                        include_image,
+                        image_model,
+                        temperature,
+                        top_p,
+                        max_new_tokens,
+                        api_name='/textbox_api_submit')
+
+    t0 = time.time()
+    job_outputs_num = 0
+    text = ''
+    while not job.done():
+        if verbose_level == 2:
+            print("Inside: %s" % llava_model, time.time() - t0, flush=True)
+        if max_time is not None and time.time() - t0 > max_time:
+            return text
+        outputs_list = job.outputs().copy()
+        job_outputs_num_new = len(outputs_list[job_outputs_num:])
+        for num in range(job_outputs_num_new):
+            res = outputs_list[job_outputs_num + num]
+            if verbose_level == 2:
+                print('Stream %d: %s' % (num, res), flush=True)
+            elif verbose_level == 1:
+                print('Stream %d' % (job_outputs_num + num), flush=True)
+            if res and len(res[0]) > 0:
+                text = res[-1][-1]
+                yield text
+        job_outputs_num += job_outputs_num_new
+        time.sleep(0.01)
+
+    outputs_list = job.outputs().copy()
+    job_outputs_num_new = len(outputs_list[job_outputs_num:])
+    for num in range(job_outputs_num_new):
+        if max_time is not None and time.time() - t0 > max_time:
+            return text
+        res = outputs_list[job_outputs_num + num]
+        if verbose_level == 2:
+            print('Final Stream %d: %s' % (num, res), flush=True)
+        elif verbose_level == 1:
+            print('Final Stream %d' % (job_outputs_num + num), flush=True)
+        if res and len(res[0]) > 0:
+            text = res[-1][-1]
+            yield text
+    job_outputs_num += job_outputs_num_new
+    if verbose_level == 1:
+        print("total job_outputs_num=%d" % job_outputs_num, flush=True)
+    return text

@@ -2,24 +2,19 @@ import copy
 import torch
 
 from evaluate_params import eval_func_param_names, input_args_list
-from gen import get_score_model, get_model, evaluate, check_locals, get_model_retry
+from gen import evaluate, check_locals
 from prompter import non_hf_types
 from utils import clear_torch_cache, NullContext, get_kwargs
 
 
 def run_cli(  # for local function:
-        base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None,
+        base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None, regenerate_gradio_clients=None,
         debug=None,
         examples=None, memory_restriction_level=None,
-        # for get_model:
-        score_model=None, load_8bit=None, load_4bit=None, low_bit_mode=None, load_half=None, use_flash_attention_2=None,
-        load_gptq=None, use_autogptq=None, load_awq=None, load_exllama=None, use_safetensors=None, revision=None,
-        use_gpu_id=None, tokenizer_base_model=None,
-        gpu_id=None, n_jobs=None, n_gpus=None, local_files_only=None, resume_download=None, use_auth_token=None,
-        trust_remote_code=None, offload_folder=None, rope_scaling=None, max_seq_len=None, compile_model=None,
-        llamacpp_dict=None, llamacpp_path=None,
-        exllama_dict=None, gptq_dict=None, attention_sinks=None, sink_dict=None, hf_model_dict=None,
-        truncation_generation=None,
+        # evaluate kwargs
+        n_jobs=None, llamacpp_path=None, llamacpp_dict=None, exllama_dict=None, gptq_dict=None, attention_sinks=None,
+        sink_dict=None, truncation_generation=None, hf_model_dict=None, load_exllama=None,
+
         use_pymupdf=None,
         use_unstructured_pdf=None,
         use_pypdf=None,
@@ -28,6 +23,7 @@ def run_cli(  # for local function:
         enable_imagegen_high_sd=None,
         try_pdf_as_html=None,
         # for some evaluate args
+        load_awq='',
         stream_output=None, async_output=None, num_async=None,
         prompt_type=None, prompt_dict=None, system_prompt=None,
         temperature=None, top_p=None, top_k=None, penalty_alpha=None, num_beams=None,
@@ -47,6 +43,7 @@ def run_cli(  # for local function:
         url_loaders=None,
         jq_schema=None,
         extract_frames=None,
+        extract_frames0=None,
         llava_prompt=None,
         visible_models=None,
         h2ogpt_key=None,
@@ -64,10 +61,13 @@ def run_cli(  # for local function:
         hyde_show_only_final=None,
         hyde_show_intermediate_in_accordion=None,
         doc_json_mode=None,
+        metadata_in_context=None,
         chatbot_role=None,
         speaker=None,
         tts_language=None,
         tts_speed=None,
+        image_file=None,
+        image_control=None,
 
         # for evaluate kwargs
         captions_model=None,
@@ -90,6 +90,7 @@ def run_cli(  # for local function:
         allow_chat_system_prompt=None,
         src_lang=None, tgt_lang=None, concurrency_count=None, save_dir=None, sanitize_bot_response=None,
         model_state0=None,
+        score_model_state0=None,
         max_max_new_tokens=None,
         is_public=None,
         max_max_time=None,
@@ -128,6 +129,7 @@ def run_cli(  # for local function:
     check_locals(**locals())
 
     score_model = ""  # FIXME: For now, so user doesn't have to pass
+    verifier_server = ""  # FIXME: For now, so user doesn't have to pass
     n_gpus = torch.cuda.device_count() if torch.cuda.is_available() else 0
     device = 'cpu' if n_gpus == 0 else 'cuda'
     context_class = NullContext if n_gpus > 1 or n_gpus == 0 else torch.device
@@ -135,21 +137,9 @@ def run_cli(  # for local function:
     with context_class(device):
         from functools import partial
 
-        # get score model
-        smodel, stokenizer, sdevice = get_score_model(reward_type=True,
-                                                      **get_kwargs(get_score_model, exclude_names=['reward_type'],
-                                                                   **locals()))
-
-        model, tokenizer, device = get_model_retry(reward_type=False,
-                                                   **get_kwargs(get_model, exclude_names=['reward_type'], **locals()))
-        model_dict = dict(base_model=base_model, tokenizer_base_model=tokenizer_base_model, lora_weights=lora_weights,
-                          inference_server=inference_server, prompt_type=prompt_type, prompt_dict=prompt_dict,
-                          visible_models=None, h2ogpt_key=None)
-        model_state = dict(model=model, tokenizer=tokenizer, device=device)
-        model_state.update(model_dict)
         requests_state0 = {}
         roles_state0 = None
-        args = (model_state, my_db_state0, selection_docs_state0, requests_state0, roles_state0)
+        args = (None, my_db_state0, selection_docs_state0, requests_state0, roles_state0)
         assert len(args) == len(input_args_list)
         fun = partial(evaluate,
                       *args,
@@ -160,6 +150,8 @@ def run_cli(  # for local function:
         all_generations = []
         if not context:
             context = ''
+        if chat_conversation is None:
+            chat_conversation = []
         while True:
             clear_torch_cache(allow_skip=True)
             instruction = input("\nEnter an instruction: ")
@@ -201,4 +193,7 @@ def run_cli(  # for local function:
             all_generations.append(outr + '\n')
             if not cli_loop:
                 break
+            if add_chat_history_to_context:
+                # for CLI keep track of conversation
+                chat_conversation.extend([[instruction, outr]])
     return all_generations

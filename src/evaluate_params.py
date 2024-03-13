@@ -72,11 +72,15 @@ eval_func_param_names = ['instruction',
                          'hyde_template',
                          'hyde_show_only_final',
                          'doc_json_mode',
+                         'metadata_in_context',
 
                          'chatbot_role',
                          'speaker',
                          'tts_language',
                          'tts_speed',
+
+                         'image_file',
+                         'image_control',
                          ]
 
 # form evaluate defaults for submit_nochat_api

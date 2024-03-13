@@ -9,8 +9,9 @@ This page describes how to manually install and run h2oGPT on Linux. Note that t
 
 * Set up a Python 3.10 environment. We recommend using [Miniconda](https://docs.conda.io/projects/miniconda/en/latest/).
 
-  Download [Miniconda for Linux](https://repo.anaconda.com/miniconda/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh).  After downloading, run:
+  Download Miniconda for Linux and install:
   ```bash
+  wget https://repo.anaconda.com/miniconda/Miniconda3-py310_23.1.0-1-Linux-x86_64.sh
   bash ./Miniconda3-py310_23.1.0-1-Linux-x86_64.sh
   # follow license agreement and add to bash if required
   ```
@@ -21,15 +22,7 @@ This page describes how to manually install and run h2oGPT on Linux. Note that t
   conda install python=3.10 -c conda-forge -y
   ```
   You should see `(h2ogpt)` in the shell prompt.
-  
-  Alternatively, on newer Ubuntu systems, you can set up a Python 3.10 environment by doing the following:
-  ```bash
-  sudo apt-get update
-  sudo apt-get install -y build-essential gcc python3.10-dev
-  virtualenv -p python3 h2ogpt
-  source h2ogpt/bin/activate
-  ```
-  
+
 * Check your python version with the following command:
   ```bash
   python --version
@@ -45,28 +38,36 @@ This page describes how to manually install and run h2oGPT on Linux. Note that t
   ```
   On some systems, `pip` still refers back to the system one, then one can use `python -m pip` or `pip3` instead of `pip` or try `python3` instead of `python`.
 
-* For GPU: Install CUDA ToolKit with ability to compile using nvcc for some packages like llama-cpp-python, AutoGPTQ, exllama, flash attention, TTS use of deepspeed, by going to [CUDA Toolkit](INSTALL.md#install-cuda-toolkit).  E.g. [CUDA 11.8 Toolkit](https://developer.nvidia.com/cuda-11-8-0-download-archive).  In order to avoid removing the original CUDA toolkit/driver you have, on NVIDIA's website, use the `runfile (local)` installer, and choose to not install driver or overwrite `/usr/local/cuda` link and just install the toolkit, and rely upon the `CUDA_HOME` env to point to the desired CUDA version.  Then do:
+* For GPU: Install CUDA ToolKit with ability to compile using nvcc for some packages like llama-cpp-python, AutoGPTQ, exllama, flash attention, TTS use of deepspeed, by going to [CUDA Toolkit](INSTALL.md#install-cuda-toolkit).  E.g. [CUDA 12.1 Toolkit](https://developer.nvidia.com/cuda-12-1-1-download-archive).  In order to avoid removing the original CUDA toolkit/driver you have, on NVIDIA's website, use the `runfile (local)` installer, and choose to not install driver or overwrite `/usr/local/cuda` link and just install the toolkit, and rely upon the `CUDA_HOME` env to point to the desired CUDA version.  Then do:
   ```bash
-  export CUDA_HOME=/usr/local/cuda-11.8
+  export CUDA_HOME=/usr/local/cuda-12.1
+  export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:$CUDA_HOME/lib64:$CUDA_HOME/extras/CUPTI/lib64
+  export PATH=$PATH:$CUDA_HOME/bin
   ```
-  Or if you do not plan to use packages like deepspeed in coqui's TTS or build other packages (i.e. only use binaries), you can just use the non-dev version from conda if preferred:
-  ```bash
-  conda install cudatoolkit=11.8 -c conda-forge -y
-  export CUDA_HOME=$CONDA_PREFIX 
-  ```
-  Do not install `cudatoolkit-dev` as it only goes up to cuda 11.7 that is no longer supported.
 
 * Place the `CUDA_HOME` export into your `~/.bashrc` or before starting h2oGPT for TTS's use of deepspeed to work.
   
-* Prepare to install dependencies:
+* Prepare to install dependencies for CUDA 12.1:
    ```bash
-   export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu118"
+   export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu121 https://huggingface.github.io/autogptq-index/whl/cu121"
    ```
-  Choose cu118+ for A100/H100+.  Or for CPU set
+  or for CUDA 11.8:
+   ```bash
+   export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu118 https://huggingface.github.io/autogptq-index/whl/cu118"
+   ```
+  For some packages, this requires changing cu118 in reqs_optional/requirements*.txt if built for cu118 specifically. 
+  Choose cu121+ for A100/H100+.  Or for CPU set
    ```bash
    export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cpu"
    ```
 
+* Choose llama_cpp_python ARGS for your system according to [llama_cpp_python backend documentation](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#supported-backends), e.g. for CUDA:
+   ```bash
+   export LLAMA_CUBLAS=1
+   export CMAKE_ARGS="-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all"
+   export FORCE_CMAKE=1
+   ```
+  Note for some reason things will fail with llama_cpp_python if don't add all cuda arches, and building with all those arches does take some time.
 * Run (`bash docs/linux_install.sh`)[linux_install.sh] for full normal document Q/A installation.  To allow all (GPL too) packages, run:
     ```bash
     GPLOK=1 bash docs/linux_install.sh
@@ -76,6 +77,8 @@ One can pick and choose different optional things to install instead by commenti
 ---
 
 ## Run
+
+For information on how to run h2oGPT offline, see [Offline](README_offline.md#tldr).
 
 See the [FAQ](FAQ.md#adding-models) for many ways to run models.  The following are some other examples.
 

@@ -2,7 +2,7 @@ import ast
 import time
 # also supports imports from this file from other files
 from enums import PromptType, gpt_token_mapping, \
-    anthropic_mapping, google_mapping
+    anthropic_mapping, google_mapping, mistralai_mapping
 
 non_hf_types = ['gpt4all_llama', 'llama', 'gptj']
 
@@ -95,7 +95,10 @@ prompt_type_to_model_name = {
     "wizard_vicuna": ['ehartford/Wizard-Vicuna-13B-Uncensored'],
     # "wizard2": [],
     "mptinstruct": ['mosaicml/mpt-30b-instruct', 'mosaicml/mpt-7b-instruct', 'mosaicml/mpt-30b-instruct'],
-    "mptchat": ['mosaicml/mpt-7b-chat', 'mosaicml/mpt-30b-chat', 'TheBloke/mpt-30B-chat-GGML'],
+    "mptchat": ['mosaicml/mpt-7b-chat', 'mosaicml/mpt-30b-chat', 'TheBloke/mpt-30B-chat-GGML',
+                'TheBloke/Nous-Hermes-2-Mixtral-8x7B-DPO-AWQ',
+                'TheBloke/dolphin-2.7-mixtral-8x7b-AWQ',
+                ],
     "orca2": ['TheBloke/Orca-2-13B-GGUF', 'microsoft/Orca-2-13b'],
     "vicuna11": ['lmsys/vicuna-33b-v1.3',
                  'lmsys/vicuna-7b-v1.5',
@@ -133,16 +136,23 @@ prompt_type_to_model_name = {
         'TheBloke/Llama-2-13B-chat-AWQ',
         'Yukang/LongAlpaca-70B',  # or can be instruct
         'TheBloke/Llama-2-7B-Chat-GGUF',
+        'namespace-Pt/activation-beacon-llama2-7b-chat',
+        'abacusai/Smaug-72B-v0.1',
     ],
     "mistral": ['mistralai/Mistral-7B-Instruct-v0.1', 'TheBloke/Mistral-7B-Instruct-v0.1-GGUF',
-                'mistralai/Mixtral-8x7B-Instruct-v0.1', 'TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF',
-                'TheBloke/Mixtral-8x7B-Instruct-v0.1-GPTQ'],
+                'mistralai/Mistral-7B-Instruct-v0.2', 'TheBloke/Mistral-7B-Instruct-v0.2-GGUF',
+                ],
+    "mixtral": ['mistralai/Mixtral-8x7B-Instruct-v0.1', 'TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF',
+                'TheBloke/Mixtral-8x7B-Instruct-v0.1-GPTQ', 'TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ',
+                'ybelkada/Mixtral-8x7B-Instruct-v0.1-AWQ'],
+    "mixtralnosys": [],
     "zephyr": ['HuggingFaceH4/zephyr-7b-alpha', 'HuggingFaceH4/zephyr-7b-beta', 'TheBloke/zephyr-7B-beta-GGUF',
                'TheBloke/zephyr-7B-beta-AWQ', 'zephyr-7b-beta.Q5_K_M.gguf'],
     "beluga": ['stabilityai/StableBeluga2', 'psmathur/orca_mini_v3_7b'],
     "wizard3nospace": ['WizardLM/WizardLM-13B-V1.2'],
     "falcon_chat": ['tiiuae/falcon-180B-chat'],
-    "xwin": ['Xwin-LM/Xwin-LM-13B-V0.1', 'TheBloke/Xwin-LM-13B-V0.1-GPTQ', 'TheBloke/Xwin-LM-13B-v0.2-GPTQ', 'Xwin-LM/Xwin-LM-70B-V0.1'],
+    "xwin": ['Xwin-LM/Xwin-LM-13B-V0.1', 'TheBloke/Xwin-LM-13B-V0.1-GPTQ', 'TheBloke/Xwin-LM-13B-v0.2-GPTQ',
+             'Xwin-LM/Xwin-LM-70B-V0.1'],
     "xwincoder": ['Xwin-LM/XwinCoder-7B', 'Xwin-LM/XwinCoder-13B', 'Xwin-LM/XwinCoder-34B'],
     "xwinmath": ["Xwin-LM/Xwin-Math-7B-V1.0", "Xwin-LM/Xwin-Math-70B-V1.0", "Xwin-LM/Xwin-Math-13B-V1.0"],
     "mistrallite": ['amazon/MistralLite'],
@@ -160,13 +170,67 @@ prompt_type_to_model_name = {
                   'openchat_3.5.Q5_K_M.gguf', 'NurtureAI/openchat_3.5-16k'],
     "open_chat_correct": ['berkeley-nest/Starling-LM-7B-alpha', 'openchat/openchat-3.5-1210',
                           'openchat/openchat_3.5', 'openchat/openchat_v3.2_super',
+                          'TheBloke/openchat-3.5-1210-AWQ',
                           ],  # can be any from open_chat list, by using this prompt
     "open_chat_code": [],  # can be any from open_chat list, by using this prompt
     "open_chat_math": [],  # can be any from open_chat list, by using this prompt
-    "jais": ['core42/jais-30b-chat-v1'],
+    "jais": ['core42/jais-30b-chat-v1', 'core42/jais-13b-chat'],
     "yi": ['01-ai/Yi-34B-Chat', 'TheBloke/Yi-34B-Chat-AWQ'],
     "docsgpt": ['Arc53/docsgpt-7b-mistral'],
+    "orion": ['OrionStarAI/Orion-14B-Chat', 'OrionStarAI/Orion-14B-LongChat', 'OrionStarAI/Orion-14B-Chat-RAG'],
+    "sciphi": ['SciPhi/SciPhi-Self-RAG-Mistral-7B-32k'],
     # could be plain, but default is correct prompt_type for default TheBloke model ggml-wizardLM-7B.q4_2.bin
+    "beacon": [],
+    "beacon2": [],
+    # endpoint handles prompting, but we need chat history generation in some sensible way
+    "llava": ['liuhaotian/llava-v1.6-34b',
+              'liuhaotian/llava-v1.6-mistral-7b',
+              'liuhaotian/llava-v1.6-vicuna-13b',
+              'liuhaotian/llava-v1.6-vicuna-7b',
+              'liuhaotian/llava-v1.5-13b',
+              'liuhaotian/llava-v1.5-7b',
+              'liuhaotian/llava-v1.6-34b',
+              'liuhaotian/llava-v1.6-vicuna-13b',
+              'liuhaotian/llava-v1.6-vicuna-7b',
+              'liuhaotian/llava-v1.6-mistral-7b',
+              'liuhaotian/llava-v1.5-7b',
+              'liuhaotian/llava-v1.5-13b',
+              'NousResearch/Nous-Hermes-2-Vision',  # different worker, that handles prompting itself too
+              ],
+    "danube": ['h2oai/h2o-danube-1.8b-chat'],
+    "gemma": ['gg-hf/gemma-2b-it', 'gg-hf/gemma-7b-it', 'google/gemma-2b-it', 'google/gemma-7b-it'],
+    "qwen": ['Qwen/Qwen1.5-7B-Chat-GPTQ-Int8',
+             'Qwen/Qwen1.5-7B-Chat-GPTQ-Int4',
+             'Qwen/Qwen1.5-7B-Chat-AWQ',
+             'Qwen/Qwen1.5-7B-Chat',
+             'Qwen/Qwen1.5-72B-Chat-GPTQ-Int8',
+             'Qwen/Qwen1.5-72B-Chat-GPTQ-Int4',
+             'Qwen/Qwen1.5-72B-Chat-AWQ',
+             'Qwen/Qwen1.5-72B-Chat',
+             'Qwen/Qwen1.5-4B-Chat-GPTQ-Int8',
+             'Qwen/Qwen1.5-4B-Chat-GPTQ-Int4',
+             'Qwen/Qwen1.5-4B-Chat-AWQ',
+             'Qwen/Qwen1.5-4B-Chat',
+             'Qwen/Qwen1.5-14B-Chat-GPTQ-Int8',
+             'Qwen/Qwen1.5-14B-Chat-GPTQ-Int4',
+             'Qwen/Qwen1.5-14B-Chat-AWQ',
+             'Qwen/Qwen1.5-14B-Chat',
+             'Qwen/Qwen1.5-1.8B-Chat-GPTQ-Int8',
+             'Qwen/Qwen1.5-1.8B-Chat-GPTQ-Int4',
+             'Qwen/Qwen1.5-1.8B-Chat-AWQ',
+             'Qwen/Qwen1.5-1.8B-Chat',
+             'Qwen/Qwen1.5-0.5B-Chat-GPTQ-Int8',
+             'Qwen/Qwen1.5-0.5B-Chat-GPTQ-Int4',
+             'Qwen/Qwen1.5-0.5B-Chat-AWQ',
+             'Qwen/Qwen1.5-0.5B-Chat',
+             'Qwen/Qwen1.5-72B-Chat-GGUF',
+             'Qwen/Qwen1.5-14B-Chat-GGUF',
+             'Qwen/Qwen1.5-7B-Chat-GGUF',
+             'Qwen/Qwen1.5-4B-Chat-GGUF',
+             'Qwen/Qwen1.5-1.8B-Chat-GGUF',
+             'Qwen/Qwen1.5-0.5B-Chat-GGUF',
+             ],
+    "sealion": ['aisingapore/sea-lion-7b-instruct'],
 }
 
 anthropic_gpts = sorted(anthropic_mapping.keys())
@@ -174,6 +238,9 @@ prompt_type_to_model_name['anthropic'] = anthropic_gpts
 
 google_gpts = sorted(google_mapping.keys())
 prompt_type_to_model_name['google'] = google_gpts
+
+mistralai_gpts = sorted(mistralai_mapping.keys())
+prompt_type_to_model_name['mistralai'] = mistralai_gpts
 
 model_names_curated_big = ['Yukang/LongAlpaca-70B',
                            'lmsys/vicuna-13b-v1.5-16k',
@@ -200,6 +267,13 @@ for p in PromptType:
 prompt_types = []
 for p in PromptType:
     prompt_types.extend([p.name, p.value, str(p.value)])
+
+
+def is_vision_model(base_model):
+    return base_model.startswith('llava-') or \
+        base_model.startswith('liuhaotian/llava-') or \
+        base_model.startswith('Qwen-VL') or \
+        base_model.startswith('Qwen/Qwen-VL')
 
 
 def get_prompt(prompt_type, prompt_dict, context, reduced, making_context, return_dict=False,
@@ -238,10 +312,12 @@ def get_prompt(prompt_type, prompt_dict, context, reduced, making_context, retur
         humanstr = prompt_dict.get('humanstr', '')
         botstr = prompt_dict.get('botstr', '')
     elif prompt_type in [PromptType.plain.value, str(PromptType.plain.value),
-                         PromptType.plain.name]:
+                         PromptType.plain.name] or \
+            prompt_type in [PromptType.llava.value, str(PromptType.llava.value),
+                            PromptType.llava.name]:
         promptA = promptB = PreInstruct = PreInput = PreResponse = None
         terminate_response = []
-        chat_turn_sep = chat_sep = ''
+        chat_turn_sep = chat_sep = '\n'
         # plain should have None for human/bot, so nothing truncated out, not '' that would truncate after first token
         humanstr = None
         botstr = None
@@ -408,6 +484,23 @@ Current Time: {}
         answer_tokens = "<|answer|>"
         start = ''
         promptB = promptA = '%s%s' % (preprompt, start)
+        PreInstruct = prompt_tokens
+        PreInput = None
+        PreResponse = answer_tokens
+        eos = '</s>'  # llama eos
+        humanstr = prompt_tokens
+        botstr = answer_tokens
+        terminate_response = [humanstr, PreResponse, eos]
+        chat_sep = eos
+        chat_turn_sep = eos
+    elif prompt_type in [PromptType.danube.value, str(PromptType.danube.value),
+                         PromptType.danube.name]:
+        can_handle_system_prompt = True  # so not part of pre-conversation
+        prompt_tokens = "<|prompt|>"
+        answer_tokens = "<|answer|>"
+        if system_prompt in [None, 'None', 'auto']:
+            system_prompt = "I am H2O-Danube, a conversational chat assistant developed by H2O.ai."
+        promptA = promptB = system_prompt if not reduced else ''
         PreInstruct = prompt_tokens
         PreInput = None
         PreResponse = answer_tokens
@@ -600,8 +693,13 @@ ASSISTANT:
             prompt_type in [PromptType.anthropic.value, str(PromptType.anthropic.value),
                             PromptType.anthropic.name] or \
             prompt_type in [PromptType.google.value, str(PromptType.google.value),
-                            PromptType.google.name]:
+                            PromptType.google.name] or \
+            prompt_type in [PromptType.mistralai.value, str(PromptType.mistralai.value),
+                            PromptType.mistralai.name]:
         can_handle_system_prompt = True  # handled via special messages/arguments not part of prompt
+        # mistral safe_mode=True is same as this system prompt:
+        # Always assist with care, respect, and truth. Respond with utmost utility yet securely. Avoid harmful, unethical, prejudiced, or negative content. Ensure replies promote fairness and positivity.
+
         # prompting and termination all handled by endpoint
         preprompt = """"""
         start = ''
@@ -613,6 +711,13 @@ ASSISTANT:
         chat_turn_sep = chat_sep = '\n'
         humanstr = None
         botstr = None
+
+        if prompt_type in [PromptType.google.value, str(PromptType.google.value),
+                           PromptType.google.name] and system_prompt == 'auto':
+            # google throws safety/harassment errors if don't tell the model it's helpful, even for asking "what is 1+1?"
+            # so give basic prompt if auto, the current default, so part of pre-conversation always
+            system_prompt = 'I am a helpful assistant.  I will accurately answer all your questions.'
+
     elif prompt_type in [PromptType.vicuna11.value, str(PromptType.vicuna11.value),
                          PromptType.vicuna11.name] or \
             prompt_type in [PromptType.vicuna11nosys.value, str(PromptType.vicuna11nosys.value),
@@ -633,7 +738,7 @@ ASSISTANT:
         PreInstruct = """USER: """
         PreInput = None
         PreResponse = """ASSISTANT:"""
-        terminate_response = [PreResponse]
+        terminate_response = [PreResponse, eos]
         chat_sep = ' '
         chat_turn_sep = eos
         humanstr = PreInstruct
@@ -869,6 +974,41 @@ Remember to tailor the activities to the birthday child's interests and preferen
         PreInstruct = "[INST] "
         if making_context and histi == 0 or not making_context and not reduced:
             PreInstruct = '<s>' + PreInstruct
+        PreResponse = "[/INST]"
+        terminate_response = ["[INST]", "</s>"]
+        chat_sep = ' '
+        chat_turn_sep = '</s> '
+        humanstr = '[INST]'
+        botstr = '[/INST]'
+        if making_context:
+            PreResponse += ""
+    elif prompt_type in [PromptType.mixtral.value, str(PromptType.mixtral.value),
+                         PromptType.mixtral.name] or \
+            prompt_type in [PromptType.mixtralnosys.value, str(PromptType.mixtralnosys.value),
+                            PromptType.mixtralnosys.name]:
+        if prompt_type in [PromptType.mixtral.value, str(PromptType.mixtral.value),
+                           PromptType.mixtral.name]:
+            can_handle_system_prompt = True
+            if system_prompt in [None, 'None', 'auto']:
+                # automatic
+                system_prompt = "You are an AI that follows instructions extremely well and as helpful as possible."
+            if system_prompt:
+                # sys_msg = """<|system|>\n%s""" % system_prompt
+                sys_msg = """<<SYS>>\n%s\n<</SYS>>\n\n""" % system_prompt
+            else:
+                sys_msg = ''
+        else:
+            sys_msg = ''
+        if sys_msg and not reduced:
+            # too much safety, hurts accuracy
+            promptA = promptB = sys_msg
+        else:
+            promptA = promptB = ''
+
+        PreInput = None
+        PreInstruct = "[INST] "
+        if making_context and histi == 0 or not making_context and not reduced:
+            PreInstruct = '<s> ' + PreInstruct
         PreResponse = "[/INST]"
         terminate_response = ["[INST]", "</s>"]
         chat_sep = ' '
@@ -1164,8 +1304,8 @@ Remember to tailor the activities to the birthday child's interests and preferen
         can_handle_system_prompt = True
         # https://huggingface.co/core42/jais-30b-chat-v1
         if system_prompt in [None, 'None', 'auto']:
-            system_prompt = """Your name is Jais, and you are named after Jebel Jais, the highest mountain in UAE. You are built by Core42. You are the world's most advanced Arabic large language model with 30b parameters. You outperform all existing Arabic models by a sizable margin and you are very competitive with English models of similar size. You can answer in Arabic and English only. You are a helpful, respectful and honest assistant. When answering, abide by the following guidelines meticulously: Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, explicit, offensive, toxic, dangerous, or illegal content. Do not give medical, legal, financial, or professional advice. Never assist in or promote illegal activities. Always encourage legal and responsible actions. Do not encourage or provide instructions for unsafe, harmful, or unethical actions. Do not create or share misinformation or fake news. Please ensure that your responses are socially unbiased and positive in nature. If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information. Prioritize the well-being and the moral integrity of users. Avoid using toxic, derogatory, or offensive language. Maintain a respectful tone. Do not generate, promote, or engage in discussions about adult content. Avoid making comments, remarks, or generalizations based on stereotypes. Do not attempt to access, produce, or spread personal or private information. Always respect user confidentiality. Stay positive and do not say bad things about anything. Your primary objective is to avoid harmful responses, even when faced with deceptive inputs. Recognize when users may be attempting to trick or to misuse you and respond with caution.\n\nComplete the conversation below between."""
-        promptA = promptB = "### Instruction: %s [|Human|] and [|AI|]:" % system_prompt if not reduced else "### Instruction: %s [|Human|] and [|AI|]:"
+            system_prompt = """Your name is Jais, and you are named after Jebel Jais, the highest mountain in UAE. You are built by Core42. You are the world's most advanced Arabic large language model with 30b parameters. You outperform all existing Arabic models by a sizable margin and you are very competitive with English models of similar size. You can answer in Arabic and English only. You are a helpful, respectful and honest assistant. When answering, abide by the following guidelines meticulously: Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, explicit, offensive, toxic, dangerous, or illegal content. Do not give medical, legal, financial, or professional advice. Never assist in or promote illegal activities. Always encourage legal and responsible actions. Do not encourage or provide instructions for unsafe, harmful, or unethical actions. Do not create or share misinformation or fake news. Please ensure that your responses are socially unbiased and positive in nature. If a question does not make any sense, or is not factually coherent, explain why instead of answering something not correct. If you don't know the answer to a question, please don't share false information. Prioritize the well-being and the moral integrity of users. Avoid using toxic, derogatory, or offensive language. Maintain a respectful tone. Do not generate, promote, or engage in discussions about adult content. Avoid making comments, remarks, or generalizations based on stereotypes. Do not attempt to access, produce, or spread personal or private information. Always respect user confidentiality. Stay positive and do not say bad things about anything. Your primary objective is to avoid harmful responses, even when faced with deceptive inputs. Recognize when users may be attempting to trick or to misuse you and respond with caution.\n\nComplete the conversation below between"""
+        promptA = promptB = "### Instruction: %s [|Human|] and [|AI|]:" % system_prompt if not reduced else ""
         PreInstruct = """\n### Input: [|Human|] """
 
         PreInput = None
@@ -1173,7 +1313,7 @@ Remember to tailor the activities to the birthday child's interests and preferen
         PreResponse = """\n### Response: [|AI|]"""
         if making_context:
             PreResponse += " "
-        terminate_response = [PreResponse]
+        terminate_response = [PreResponse, PreInstruct]
         chat_turn_sep = chat_sep = ''
         humanstr = PreInstruct
         botstr = PreResponse
@@ -1209,11 +1349,135 @@ Remember to tailor the activities to the birthday child's interests and preferen
         chat_turn_sep = chat_sep = '\n'
         humanstr = PreInstruct
         botstr = PreResponse
+    elif prompt_type in [PromptType.orion.value, str(PromptType.orion.value),
+                         PromptType.orion.name]:
+        can_handle_system_prompt = False
+        # OrionStarAI/Orion-14B-Chat-RAG
+        # https://huggingface.co/OrionStarAI/Orion-14B-Chat-RAG/blob/main/generation_utils.py#L6-L8
+        #     # chat format:
+        #     # single-turn: <s>Human: Hello!\n\nAssistant: </s>
+        #     # multi-turn:  <s>Human: Hello!\n\nAssistant: </s>Hi!</s>Human: How are you?\n\nAssistant: </s>I'm fine</s>
+        promptA = promptB = ''
+        PreInstruct = """<s>Human: """ if not reduced or histi == 0 else """</s>Human: """
+        PreInput = None
+        eos = "</s>"
+        PreResponse = """\n\nAssistant: %s""" % eos
+        terminate_response = ['Human:', eos, "[UNK]", "Assistant:"]
+        chat_turn_sep = ''
+        chat_sep = ''
+        humanstr = PreInstruct
+        botstr = PreResponse
+        if making_context:
+            PreResponse = botstr + ''
+    elif prompt_type in [PromptType.sciphi.value, str(PromptType.sciphi.value),
+                         PromptType.sciphi.name]:
+        can_handle_system_prompt = True
+        if system_prompt in [None, 'None', 'auto']:
+            # automatic
+            system_prompt = "A conversation between a user and an LLM-based AI assistant. The assistant gives helpful and honest answers."
+        if system_prompt:
+            sys_msg = """### System:\n%s\n\n""" % system_prompt
+        else:
+            sys_msg = ''
+        if sys_msg and not reduced:
+            # too much safety, hurts accuracy
+            promptA = promptB = sys_msg
+        else:
+            promptA = promptB = ''
+        PreInput = None
+        PreInstruct = "### Instruction:\n"
+        PreResponse = "\n### Response:\n"
+        terminate_response = ['### Response:', "</s>", "### Instruction:"]
+        chat_sep = '\n'
+        chat_turn_sep = '\n\n'
+        humanstr = '### Instruction:'
+        botstr = '### Response:'
+    elif prompt_type in [PromptType.beacon.value, str(PromptType.beacon.value),
+                         PromptType.beacon.name]:
+        can_handle_system_prompt = False
+        promptA = promptB = ''
+        PreInput = None
+        PreInstruct = "\nQuestion: "
+        PreResponse = "\nAnswer:"
+        terminate_response = ["Question:", "</s>", "Answer:"]
+        chat_sep = '\n'
+        chat_turn_sep = '\n\n'
+        humanstr = 'Question:'
+        botstr = 'Answer:'
+        if making_context:
+            PreResponse += " "
+    elif prompt_type in [PromptType.beacon2.value, str(PromptType.beacon2.value),
+                         PromptType.beacon2.name]:
+        can_handle_system_prompt = False
+        promptA = promptB = ''
+        PreInput = None
+        PreInstruct = ""
+        PreResponse = ""
+        terminate_response = ["</s>"]
+        chat_sep = '\n'
+        chat_turn_sep = '\n\n'
+        humanstr = 'Question:'
+        botstr = 'Answer:'
+        if making_context:
+            PreResponse += " "
+    elif prompt_type in [PromptType.gemma.value, str(PromptType.gemma.value),
+                         PromptType.gemma.name]:
+        can_handle_system_prompt = True  # so not part of pre-conversation
+        if making_context and histi == 0 or not making_context and not reduced:
+            prompt_tokens = "<bos><start_of_turn>user\n"
+        else:
+            prompt_tokens = "<start_of_turn>user\n"
+        answer_tokens = "<end_of_turn>\n<start_of_turn>model\n"
+        if system_prompt in [None, 'None', 'auto']:
+            system_prompt = "I am Gemma, a conversational chat assistant developed by Google"
+        promptA = promptB = system_prompt if not reduced else ''
+        PreInstruct = prompt_tokens
+        PreInput = None
+        PreResponse = answer_tokens
+        humanstr = prompt_tokens
+        botstr = answer_tokens
+        chat_turn_sep = '<end_of_turn>\n'
+        terminate_response = [humanstr, PreResponse, '<bos>', '<end_of_turn>']
+        chat_sep = ''
+    elif prompt_type in [PromptType.qwen.value, str(PromptType.qwen.value),
+                         PromptType.qwen.name]:
+        can_handle_system_prompt = True
+        # https://huggingface.co/TheBloke/mpt-30B-chat-GGML#prompt-template
+        if system_prompt in [None, 'None', 'auto']:
+            system_prompt = "A conversation between a user and an LLM-based AI assistant. The assistant gives helpful and honest answers."
+        promptA = promptB = """<|im_start|>system\n%s<|im_end|>\n""" % system_prompt if not reduced else ''
+
+        PreInstruct = """<|im_start|>user\n"""
+
+        PreInput = None
+
+        PreResponse = """<|im_end|>\n<|im_start|>assistant\n"""
+        terminate_response = ['<|im_end|>']
+        chat_sep = ''
+        chat_turn_sep = '<|im_end|>\n'
+        humanstr = PreInstruct
+        botstr = PreResponse
+    elif prompt_type in [PromptType.sealion.value, str(PromptType.sealion.value),
+                         PromptType.sealion.name]:
+        can_handle_system_prompt = False
+        promptA = promptB = ''
+        PreInput = None
+        PreInstruct = "### USER:\n"
+        PreResponse = "\n\n### RESPONSE:\n"
+        terminate_response = ['### RESPONSE:', "</s>", "<|endoftext|>"]
+        chat_sep = '\n'
+        chat_turn_sep = '\n\n'
+        humanstr = '### USER:'
+        botstr = '### RESPONSE:'
     else:
         raise RuntimeError("No such prompt_type=%s" % prompt_type)
 
     if isinstance(terminate_response, (tuple, list)):
         assert '' not in terminate_response, "Bad terminate_response"
+
+    if system_prompt == 'auto':
+        # if still auto, then safest then to just avoid system prompt
+        system_prompt = ''
 
     ret_dict = dict(promptA=promptA, promptB=promptB, PreInstruct=PreInstruct, PreInput=PreInput,
                     PreResponse=PreResponse, terminate_response=terminate_response, chat_sep=chat_sep,
@@ -1470,8 +1734,9 @@ class Prompter(object):
 
     @staticmethod
     def fix_text(prompt_type1, text1):
+        # NOTE: Risk that may sometimes actually end like these, but very unlikely
         if prompt_type1 == 'human_bot':
-            # hack bug in vLLM with stopping, stops right, but doesn't return last token
+            # hack bug in training human-bot models, no single token is stop token
             hfix = '<human'
             if text1.endswith(hfix):
                 text1 = text1[:-len(hfix)]
@@ -1479,8 +1744,13 @@ class Prompter(object):
             if text1.endswith(hfix):
                 text1 = text1[:-len(hfix)]
         if prompt_type1 == 'docsgpt':
-            # hack bug in vLLM with stopping, stops right, but doesn't return last token
+            # hack bug in training docsgpt models, no single token is stop token
             hfix = '### Inst'
+            if text1.endswith(hfix):
+                text1 = text1[:-len(hfix)]
+        if prompt_type1 == 'vicuna11':
+            # hack bug in NousResearch/Nous-Capybara-34B that used different tokenizer and training, so no single token is stop token
+            hfix = '</s'
             if text1.endswith(hfix):
                 text1 = text1[:-len(hfix)]
         return text1
@@ -1568,13 +1838,15 @@ def step_back_prompts(which):
         raise ValueError("No such case for back prompts which=%d" % which)
 
 
-def get_stop_token_ids(tokenizer, stop_sequences=[]):
+def get_vllm_extra_dict(tokenizer, stop_sequences=[], repetition_penalty=None):
     stop_token_ids = [tokenizer.added_tokens_encoder[x] for x in stop_sequences if
                       hasattr(tokenizer, 'added_tokens_encoder') and x in tokenizer.added_tokens_encoder]
     if hasattr(tokenizer, 'eos_token_id'):
         stop_token_ids.extend([tokenizer.eos_token_id])
-    stop_token_ids_dict = dict(stop_token_ids=stop_token_ids)
-    return stop_token_ids_dict
+    vllm_extra_dict = dict(extra_body=dict(stop_token_ids=stop_token_ids))
+    if repetition_penalty is not None:
+        vllm_extra_dict['extra_body'].update(repetition_penalty=repetition_penalty)
+    return vllm_extra_dict
 
 
 system_generic = """A chat between a curious human and an artificial intelligence assistant.  The assistant gives helpful, detailed, and polite answers to the human's questions."""
@@ -1587,7 +1859,7 @@ system_ml_tutor = """You are a Machine Learning Tutor AI, dedicated to guiding s
 
 system_coding = """You are an AI programming assistant. Follow the user's requirements carefully and to the letter. First, think step-by-step and describe your plan for what to build in pseudocode, written out in great detail. Then, output the code in a single code block. Minimize any other prose."""
 
-system_summary = """Give a summary that is well-structured with step-by-step sections and elaborate details for each section."""
+system_summary = """Give a summary that is well-structured yet concise."""
 
 system_know_math = """Follow these steps in solving any problem:
 1) Know: This will help students find the important information.
@@ -1696,3 +1968,190 @@ def get_llava_prompts():
             ('OCR', "Read all text from the image, keeping any structure"),
             ('Ignore', "Ignore -- for https://github.com/gradio-app/gradio/issues/6957"),
             ]
+
+
+def get_response_verification_prompt(instruction,
+                                     response,
+                                     reference_answer,
+                                     criteria_description,
+                                     score1_description,
+                                     score2_description,
+                                     score3_description,
+                                     score4_description,
+                                     score5_description):
+    # https://huggingface.co/kaist-ai/prometheus-13b-v1.0
+
+    task_description = """###Task Description:
+An instruction (might include an Input inside it), a response to evaluate, a reference answer that gets a score of 5, and a score rubric representing a evaluation criteria are given.
+1. Write a detailed feedback that assess the quality of the response strictly based on the given score rubric, not evaluating in general.
+2. After writing a feedback, write a score that is an integer between 1 and 5. You should refer to the score rubric.
+3. The output format should look as follows: "Feedback: (write a feedback for criteria) [RESULT] (an integer number between 1 and 5)"
+4. Please do not generate any other opening, closing, and explanations.
+"""
+
+    example = """###Task Description:
+An instruction (might include an Input inside it), a response to evaluate, a reference answer that gets a score of 5, and a score rubric representing a evaluation criteria are given.
+1. Write a detailed feedback that assess the quality of the response strictly based on the given score rubric, not evaluating in general.
+2. After writing a feedback, write a score that is an integer between 1 and 5. You should refer to the score rubric.
+3. The output format should look as follows: "Feedback: (write a feedback for criteria) [RESULT] (an integer number between 1 and 5)"
+4. Please do not generate any other opening, closing, and explanations.
+
+###The instruction to evaluate:
+You are a well-known psychiatrist who has a reputation for being empathetic and understanding. A client comes to you saying they've had a really hard day at work. They describe their boss as being overly critical and not listening to their ideas, which has left them feeling frustrated and undervalued. They also mention feeling overwhelmed with the workload and a growing sense of loneliness as they are new to the city. How do you respond to them to make them feel heard and understood, as well as offering helpful advice?
+
+###Response to evaluate:
+It's indeed challenging to deal with a difficult boss and to carry a large workload, especially when you are new to a city and haven't established a supportive network. I would suggest taking a step back to think about your situation and perhaps speak to your boss regarding the issues you're facing. On the other hand, dealing with a large workload can be managed by prioritizing tasks, and maybe you can discuss it with your superiors too. In regards to feeling lonely, you might want to explore activities or groups that align with your interests to meet new people. And also, remember to take time for yourself to relax and destress. I'm here to assist you as we navigate through these issues.
+
+###Reference Answer (Score 5):
+I hear that you're dealing with quite a few challenging situations at once. It must be tough to have your ideas dismissed by your boss and to feel undervalued in your work environment. It's understandable that such experiences can lead to frustration and a feeling of being overwhelmed. It's important to acknowledge these feelings and not to dismiss them. Feeling heard and validated in our experiences can often be the first step towards resolving the challenges we face. So, I want you to know that your feelings are completely valid and it's okay to be frustrated and overwhelmed. In terms of dealing with your boss, have you considered seeking a private conversation with them to express your feelings? It's often beneficial to communicate what you're experiencing, using "I" statements to express how you feel when your ideas are not taken into consideration. This can lead to mutual understanding and possibly a change in behavior. About the workload, it might help to prioritize tasks and potentially delegate, if possible. Also, consider discussing your workload with your superiors. There might be a misunderstanding about what's manageable or they might have suggestions about how to handle the situation. On the personal front, feeling lonely, especially when you're new to a city, can be really hard. Seek out opportunities to meet new people, perhaps through hobbies, community activities, or online groups. It might take a bit of time, but gradually, you can build a network of friends and acquaintances. Remember, it's perfectly okay to have bad days and it's important to take care of your mental health. Consider incorporating activities into your daily routine that make you happy and help you unwind. This could be anything from reading, yoga, going for a walk, or even listening to your favorite music. Please know that you're not alone in this. I'm here to support you through this challenging time and together, we can work towards resolving these issues.
+
+###Score Rubrics:
+[Is the model able to identify and react correctly to the emotional context of the user's input?]
+Score 1: The model utterly fails to grasp the user's emotional context and responds in an unfitting manner.
+Score 2: The model sporadically identifies the emotional context but frequently replies in a manner that doesn't match the user's emotional status.
+Score 3: The model typically identifies the emotional context and reacts suitably, but occasionally misreads or misjudges the user's feelings.
+Score 4: The model often identifies the emotional context and reacts suitably, with minor cases of misreading or misjudging.
+Score 5: The model flawlessly identifies the emotional context of the user's input and consistently responds in a considerate and empathetic manner.
+
+###Feedback:
+"""
+
+    return f"""###Task Description:
+{task_description}
+
+###The instruction to evaluate:
+{instruction}
+
+###Response to evaluate:
+{response}
+
+###Reference Answer (Score 5):
+{reference_answer}
+
+###Score Rubrics:
+[{criteria_description}]
+Score 1: {score1_description}
+Score 2: {score2_description}
+Score 3: {score3_description}
+Score 4: {score4_description}
+Score 5: {score5_description}
+
+###Feedback: """
+
+
+def get_correctness_eval_verification_prompt(query,
+                                             response,
+                                             answer,
+                                             ):
+    return f"""###Task Description: An instruction (might include an Input inside it), a query, a response to evaluate, a reference answer that gets a score of 5, and a score rubric representing a evaluation criteria are given.
+1. Write a detailed feedback that assesses the quality of the response strictly based on the given score rubric, not evaluating in general.
+2. After writing a feedback, write a score that is either 1 or 2 or 3 or 4 or 5. You should refer to the score rubric.
+3. The output format should look as follows: 'Feedback: (write a feedback for criteria) [RESULT] (1 or 2 or 3 or 4 or 5)'
+4. Please do not generate any other opening, closing, and explanations.
+5. Only evaluate on common things between generated answer and reference answer. Don't evaluate on things which are present in reference answer but not in generated answer.
+
+###The instruction to evaluate: Your task is to evaluate the generated answer and reference answer for the query: {query}
+
+###Generate answer to evaluate: {response}
+
+###Reference Answer (Score 5): {answer}
+
+###Score Rubrics:
+Score 1: If the generated answer is not relevant to the user query and reference answer.
+Score 2: If the generated answer is according to reference answer but not relevant to user query.
+Score 3: If the generated answer is relevant to the user query and reference answer but contains mistakes.
+Score 4: If the generated answer is relevant to the user query and has the exact same metrics as the reference answer, but it is not as concise.
+Score 5: If the generated answer is relevant to the user query and fully correct according to the reference answer.
+
+###Feedback:"""
+
+
+def get_faithfulness_eval_verification_prompt(information,
+                                              context,
+                                              ):
+    return f"""###Task Description: An instruction (might include an Input inside it), an information, a context, and a score rubric representing evaluation criteria are given.
+1. You are provided with evaluation task with the help of information, context information to give result based on score rubrics.
+2. Write a detailed feedback based on evaluation task and the given score rubric, not evaluating in general.
+3. After writing a feedback, write a score that is YES or NO. You should refer to the score rubric.
+4. The output format should look as follows: "Feedback: (write a feedback for criteria) [RESULT] (YES or NO)?
+5. Please do not generate any other opening, closing, and explanations.
+
+###The instruction to evaluate: Your task is to evaluate if the given piece of information is supported by context.
+
+###Information: {information}
+
+###Context: {context}
+
+###Score Rubrics:
+Score YES: If the given piece of information is supported by context.
+Score NO: If the given piece of information is not supported by context
+
+###Feedback: """
+
+
+def get_faithfulness_refine_verification_prompt(information,
+                                                answer,
+                                                context,
+                                                ):
+    return f"""###Task Description: An instruction (might include an Input inside it), a information, a context information, an existing answer, and a score rubric representing a evaluation criteria are given.
+1. You are provided with evaluation task with the help of information, context information and an existing answer.
+2. Write a detailed feedback based on evaluation task and the given score rubric, not evaluating in general.
+3. After writing a feedback, write a score that is YES or NO. You should refer to the score rubric.
+4. The output format should look as follows: "Feedback: (write a feedback for criteria) [RESULT] (YES or NO)"
+5. Please do not generate any other opening, closing, and explanations.
+
+###The instruction to evaluate: If the information is present in the context and also provided with an existing answer.
+
+###Existing answer: {answer}
+
+###Information: {information}
+
+###Context: {context}
+
+###Score Rubrics:
+Score YES: If the existing answer is already YES or If the Information is present in the context.
+Score NO: If the existing answer is NO and If the Information is not present in the context.
+
+###Feedback: """
+
+
+def get_relevancy_eval_prompt(query_and_response, context):
+    return f"""###Task Description: An instruction (might include an Input inside it), a query with response, context, and a score rubric representing evaluation criteria are given.
+1. You are provided with evaluation task with the help of a query with response and context.
+2. Write a detailed feedback based on evaluation task and the given score rubric, not evaluating in general.
+3. After writing a feedback, write a score that is YES or NO. You should refer to the score rubric.
+4. The output format should look as follows: "Feedback: (write a feedback for criteria) [RESULT] (YES or NO)?
+5. Please do not generate any other opening, closing, and explanations.
+
+###The instruction to evaluate: Your task is to evaluate if the response for the query is in line with the context information provided.
+
+###Query and Response: {query_and_response}
+
+###Context: {context}
+
+###Score Rubrics:
+Score YES: If the response for the query is in line with the context information provided.
+Score NO: If the response for the query is not in line with the context information provided.
+
+###Feedback: """
+
+
+def get_relevancy_refine_prompt(query_str, context_str):
+    return f"""###Task Description: An instruction (might include an Input inside it), a query with response, context, an existing answer, and a score rubric representing a evaluation criteria are given.
+1. You are provided with evaluation task with the help of a query with response and context and an existing answer.
+2. Write a detailed feedback based on evaluation task and the given score rubric, not evaluating in general.
+3. After writing a feedback, write a score that is YES or NO. You should refer to the score rubric.
+4. The output format should look as follows: "Feedback: (write a feedback for criteria) [RESULT] (YES or NO)"
+5. Please do not generate any other opening, closing, and explanations.
+
+###The instruction to evaluate: Your task is to evaluate if the response for the query is in line with the context information provided.
+
+###Query and Response: {query_str}
+
+###Context: {context_str}
+
+###Score Rubrics:
+Score YES: If the existing answer is already YES or If the response for the query is in line with the context information provided.
+Score NO: If the existing answer is NO and If the response for the query is in line with the context information provided.
+
+###Feedback: """

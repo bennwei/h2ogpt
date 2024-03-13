@@ -12,6 +12,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "h2ogpt.fullname" . }}
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
   labels:
     app: {{ include "h2ogpt.fullname" . }}
 spec:
@@ -32,6 +33,9 @@ spec:
       {{- end }}
       labels:
         app: {{ include "h2ogpt.fullname" . }}
+        {{- with .Values.h2ogpt.podLabels }}
+        {{ toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.h2ogpt.nodeSelector }}
       nodeSelector:
@@ -44,7 +48,19 @@ spec:
       securityContext:
         {{- toYaml .Values.h2ogpt.podSecurityContext | nindent 8 }}
       affinity:
+        {{- if .Values.h2ogpt.podAffinity }}
         podAntiAffinity:
+          {{- if .Values.h2ogpt.podAffinity.hostname }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ include "h2ogpt.fullname" . }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.h2ogpt.podAffinity.zone }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -55,6 +71,11 @@ spec:
                       values:
                         - {{ include "h2ogpt.fullname" . }}
                 topologyKey: failure-domain.beta.kubernetes.io/zone
+          {{- end }}
+        {{- end }}
+      {{- with .Values.h2ogpt.extraAffinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
 {{- if and (.Values.tgi.enabled) (not .Values.h2ogpt.stack.enabled ) }}
       initContainers:
         - name: tgi-check
@@ -297,6 +318,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "h2ogpt.fullname" . }}-volume
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -313,6 +335,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "h2ogpt.fullname" . }}-tgi-inference
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
   labels:
     app: {{ include "h2ogpt.fullname" . }}-tgi-inference
 spec:
@@ -333,6 +356,9 @@ spec:
       {{- end }}
       labels:
         app: {{ include "h2ogpt.fullname" . }}-tgi-inference
+        {{- with .Values.tgi.podLabels }}
+        {{ toYaml . | nindent 6 }}
+        {{- end }}
     spec:
       {{- with .Values.tgi.nodeSelector }}
       nodeSelector:
@@ -345,7 +371,19 @@ spec:
       securityContext:
         {{- toYaml .Values.tgi.podSecurityContext | nindent 8 }}
       affinity:
+        {{- if .Values.tgi.podAffinity }}
         podAntiAffinity:
+          {{- if .Values.tgi.podAffinity.hostname }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ include "h2ogpt.fullname" . }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.tgi.podAffinity.zone }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -356,6 +394,11 @@ spec:
                       values:
                         - {{ include "h2ogpt.fullname" . }}
                 topologyKey: failure-domain.beta.kubernetes.io/zone
+          {{- end }}
+        {{- end }}
+      {{- with .Values.tgi.extraAffinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.tgi.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -453,6 +496,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "h2ogpt.fullname" . }}-tgi-inference-volume
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -468,6 +512,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "h2ogpt.fullname" . }}-vllm-inference
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
   labels:
     app: {{ include "h2ogpt.fullname" . }}-vllm-inference
 spec:
@@ -488,6 +533,9 @@ spec:
       {{- end }}
       labels:
         app: {{ include "h2ogpt.fullname" . }}-vllm-inference
+        {{- with .Values.vllm.podLabels }}
+        {{ toYaml . | nindent 8 }}
+        {{- end }}
     spec:
       {{- with .Values.vllm.nodeSelector }}
       nodeSelector:
@@ -500,7 +548,19 @@ spec:
       securityContext:
         {{- toYaml .Values.vllm.podSecurityContext | nindent 8 }}
       affinity:
+        {{- if .Values.vllm.podAffinity }}
         podAntiAffinity:
+          {{- if .Values.vllm.podAffinity.hostname }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - {{ include "h2ogpt.fullname" . }}
+              topologyKey: kubernetes.io/hostname
+          {{- end }}
+          {{- if .Values.vllm.podAffinity.zone }}
           preferredDuringSchedulingIgnoredDuringExecution:
             - weight: 100
               podAffinityTerm:
@@ -511,6 +571,11 @@ spec:
                       values:
                         - {{ include "h2ogpt.fullname" . }}
                 topologyKey: failure-domain.beta.kubernetes.io/zone
+          {{- end }}
+        {{- end }}
+      {{- with .Values.vllm.extraAffinity }}
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.vllm.imagePullSecrets }}
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
@@ -570,9 +635,8 @@ spec:
             - name: {{ include "h2ogpt.fullname" . }}-vllm-inference-volume
               mountPath: /workspace/.cache
               subPath: cache
-            - name: {{ include "h2ogpt.fullname" . }}-vllm-inference-volume
+            - name: shm
               mountPath: /dev/shm
-              subPath: shm
       volumes:
         - name: {{ include "h2ogpt.fullname" . }}-vllm-inference-volume
           {{- if not .Values.vllm.storage.useEphemeral }}
@@ -589,6 +653,10 @@ spec:
                     storage: {{ .Values.vllm.storage.size | quote }}
                 storageClassName: {{ .Values.vllm.storage.class }}
           {{- end }}
+        - emptyDir: 
+            medium: Memory
+            sizeLimit: 10.24Gi
+          name: shm          
 {{- end }}
 ---
 {{- if and (.Values.vllm.enabled) (not .Values.vllm.storage.useEphemeral) }}
@@ -596,6 +664,7 @@ apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
   name: {{ include "h2ogpt.fullname" . }}-vllm-inference-volume
+  namespace: {{ include "h2ogpt.namespace" . | quote }}
 spec:
   accessModes:
     - ReadWriteOnce

@@ -2,6 +2,30 @@
 
 One can connect to Hugging Face text generation inference server, gradio servers running h2oGPT, OpenAI, or Azure OpenAI servers.  
 
+## oLLaMa
+
+Use as inference server as:
+```bash
+ollama run llama2
+```
+and in another terminal run:
+```bash
+python generate.py --base_model=llama2 --inference_server=vllm_chat:http://localhost:11434/v1/ --prompt_type=openai_chat --max_seq_len=4096
+```
+or if you prefer to load from UI one can run:
+```bash
+python generate.py
+```
+then when h2oGPT UI is up, go to Models Tab and enter `llama2` into base model and enter `vllm_chat:http://localhost:11434/v1/` for server and ensure prompt_type is `plain` and click on right side panel and open context length and set `max_seq_len` to `4096.
+
+![ollama_setup.png](ollama_setup.png)
+
+![ollama_max_seq_len.png](ollama_max_seq_len.png)
+
+Then use as normal in UI:
+
+![ollama_use.png](ollama_use.png)
+
 ## Hugging Face Text Generation Inference Server-Client
 
 ### Local Install
@@ -232,6 +256,8 @@ print(text)
 ```
 for some IP `<IP>`, which could be the local IP and some key `<API_KEY>`. If OpenAI server was run from h2oGPT using `--openai_server=True` (default), then `api_key` is from ENV `H2OGPT_OPENAI_API_KEY` on same host as Gradio server OpenAI.  If ENV `H2OGPT_OPENAI_API_KEY` is not defined, then h2oGPT will use the first key in the `h2ogpt_api_keys` (file or CLI list) as the OpenAI API key.  If no key is at all set, the OpenAI server is "open" with key `EMPTY` as long as `--allow_api=True`.  If h2oGPT was started with `--model_lock` with multiple inference servers, use `model` to choose which model to select, like done with `--visible_models` from h2oGPT CLI.
 
+**Note:** The default OpenAI proxy port for MacOS is set to `5001`, since ports 5000 and 7000 are being used by [AirPlay in MacOS](https://developer.apple.com/forums/thread/682332).
+
 ## OpenAI Inference Server-Client
 
 If you have an OpenAI key and set an ENV `OPENAI_API_KEY`, then you can access OpenAI models via gradio by running:
@@ -256,9 +282,26 @@ conda create -n vllm -y
 conda activate vllm
 conda install python=3.10 -y
 ```
-Assuming torch was installed with CUDA 11.8, and you have installed cuda locally in `/usr/local/cuda-11.8`, then can start in OpenAI compliant mode.  E.g. for LLaMa 65B on 2*A100 GPUs:
+Assuming torch was installed with CUDA 12.1, and you have installed cuda locally in `/usr/local/cuda-12.1`:
 ```bash
-CUDA_HOME=/usr/local/cuda-11.8 pip install https://github.com/vllm-project/vllm/releases/download/v0.2.2/vllm-0.2.2+cu118-cp310-cp310-manylinux1_x86_64.whl ray pandas gputil==1.4.0
+export CUDA_HOME=/usr/local/cuda-12.1
+export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu123"
+pip install mosaicml-turbo megablocks==0.5.1 --upgrade  # see docker_build_script_ubuntu.sh for x86 prebuilt wheel on s3
+pip install fschat==0.2.34 ray pandas gputil==1.4.0 uvicorn[standard]
+# optional:
+pip install flash-attn==2.4.2
+# optional:
+pip install autoawq==0.1.8
+# CHOOSE VLLM:
+# for latest vllm:
+# pip install git+https://github.com/vllm-project/vllm.git
+# for h2oai vllm with reversion of memory changes on 0.3.0:
+pip install git+https://github.com/h2oai/vllm.git@v0.3.0h2oai  # see docker_build_script_ubuntu.sh for x86 prebuilt wheel on s3
+# standard 0.3.0:
+# pip install vllm==0.3.0
+```
+Then can start in OpenAI compliant mode, e.g. for LLaMa 65B on 2*A100 GPUs:
+```
 export NCCL_IGNORE_DISABLED_P2P=1
 export CUDA_VISIBLE_DEVICESs=0,1
 python -m vllm.entrypoints.openai.api_server --port=5000 --host=0.0.0.0 --model h2oai/h2ogpt-research-oasst1-llama-65b --tokenizer=hf-internal-testing/llama-tokenizer --tensor-parallel-size=2 --seed 1234 --max-num-batched-tokens=2048
@@ -270,14 +313,8 @@ export CUDA_VISIBLE_DEVICESs=0,1,2,3
 python -m vllm.entrypoints.openai.api_server --port=5000 --host=0.0.0.0 --model h2oai/h2ogpt-4096-llama2-70b-chat --tokenizer=hf-internal-testing/llama-tokenizer --tensor-parallel-size=4 --seed 1234 --max-num-batched-tokens=8192
 ```
 
-For Mixtral 8*7B run:
+For Mixtral 8*7B need newer cuda 12 toolkit and vllm build, then run:
 ```bash
-export CUDA_HOME=/usr/local/cuda-12.3
-export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu123"
-# so builds on cuda 12.3 given 12.1 is default build
-pip install git+https://github.com/vllm-project/vllm.git
-pip install mosaicml-turbo
-pip install git+https://github.com/stanford-futuredata/megablocks.git
 export CUDA_VISIBLE_DEVICES=0,1
 python -m vllm.entrypoints.openai.api_server --port=5002 --host=0.0.0.0 --model mistralai/Mixtral-8x7B-Instruct-v0.1 --seed 1234 --max-num-batched-tokens=65536 --tensor-parallel-size=2
 ```

@@ -5,6 +5,7 @@ import uuid
 from collections import deque
 
 from log import logger
+from openai_server.backend_utils import convert_messages_to_structure
 
 
 def decode(x, encoding_name="cl100k_base"):
@@ -34,7 +35,7 @@ def count_tokens(x, encoding_name="cl100k_base"):
         return 0
 
 
-def get_gradio_client():
+def get_gradio_client(user=None):
     try:
         from gradio_utils.grclient import GradioClient as Client
         concurrent_client = True
@@ -47,24 +48,60 @@ def get_gradio_client():
     gradio_host = os.getenv('GRADIO_SERVER_HOST', 'localhost')
     gradio_port = int(os.getenv('GRADIO_SERVER_PORT', '7860'))
     gradio_url = f'{gradio_prefix}://{gradio_host}:{gradio_port}'
-    print("Getting gradio client at %s" % gradio_url, flush=True)
-    client = Client(gradio_url)
-    if concurrent_client:
-        client.setup()
+
+    auth = os.environ.get('GRADIO_AUTH', 'None')
+    auth_access = os.environ.get('GRADIO_AUTH_ACCESS', 'open')
+    guest_name = os.environ.get('GRADIO_GUEST_NAME', '')
+    if auth != 'None':
+        if user:
+            user_split = user.split(':')
+            assert len(user_split) >= 2, "username cannot contain : character and must be in form username:password"
+            auth_kwargs = dict(auth=(user_split[0], ':'.join(user_split[1:])))
+        elif guest_name:
+            auth_kwargs = dict(auth=(guest_name, guest_name))
+        elif auth_access == 'open':
+            auth_kwargs = dict(auth=(str(uuid.uuid4()), str(uuid.uuid4())))
+        else:
+            auth_kwargs = None
+    else:
+        auth_kwargs = dict()
+    print("OpenAI user: %s" % auth_kwargs, flush=True)
+
+    if auth_kwargs is not None:
+        print("Getting gradio client at %s" % gradio_url, flush=True)
+        client = Client(gradio_url, **auth_kwargs)
+        if concurrent_client:
+            client.setup()
+    else:
+        print("Can't get gradio client at %s yet, no auth" % gradio_url, flush=True)
+        client = None
     return client
 
 
 gradio_client = get_gradio_client()
 
 
-def get_client():
+def get_client(user=None):
     # concurrent gradio client
-    if hasattr(gradio_client, 'clone'):
+    if gradio_client is None or user is not None:
+        assert user is not None, "Need user set to username:password"
+        client = get_gradio_client(user=user)
+    elif hasattr(gradio_client, 'clone'):
         client = gradio_client.clone()
     else:
         print(
             "re-get to ensure concurrency ok, slower if API is large, for speed ensure gradio_utils/grclient.py exists.")
-        client = get_gradio_client()
+        client = get_gradio_client(user=user)
+
+    # even if not auth, want to login
+    if user:
+        user_split = user.split(':')
+        username = user_split[0]
+        password = ':'.join(user_split[1:])
+        num_model_lock = client.predict(api_name='/num_model_lock')
+        chatbots = [None] * (2 + num_model_lock)
+        client.predict(None, username, password, *tuple(chatbots), api_name='/login')
+
     return client
 
 
@@ -73,27 +110,49 @@ def get_response(instruction, gen_kwargs, verbose=False, chunk_response=True, st
     kwargs = dict(instruction=instruction)
     if os.getenv('GRADIO_H2OGPT_H2OGPT_KEY'):
         kwargs.update(dict(h2ogpt_key=os.getenv('GRADIO_H2OGPT_H2OGPT_KEY')))
-    gen_kwargs['max_new_tokens'] = gen_kwargs.pop('max_tokens', 256)
-    gen_kwargs['visible_models'] = gen_kwargs.pop('model', 0)
+    # max_tokens=16 for text completion by default
+    gen_kwargs['max_new_tokens'] = gen_kwargs.pop('max_new_tokens', gen_kwargs.pop('max_tokens', 256))
+    gen_kwargs['visible_models'] = gen_kwargs.pop('visible_models', gen_kwargs.pop('model', 0))
+
+    if gen_kwargs.get('do_sample') in [False, None]:
+        # be more like OpenAI, only temperature, not do_sample, to control
+        gen_kwargs['temperature'] = gen_kwargs.pop('temperature', 0.0)  # unlike OpenAI, default to not random
+    # https://platform.openai.com/docs/api-reference/chat/create
+    if gen_kwargs['temperature'] > 0.0:
+        # let temperature control sampling
+        gen_kwargs['do_sample'] = True
+    elif gen_kwargs['top_p'] != 1.0:
+        # let top_p control sampling
+        gen_kwargs['do_sample'] = True
+        if gen_kwargs.get('top_k') == 1 and gen_kwargs.get('temperature') == 0.0:
+            logger.warning("Sampling with top_k=1 has no effect if top_k=1 and temperature=0")
+    else:
+        # no sampling, make consistent
+        gen_kwargs['top_p'] = 1.0
+        gen_kwargs['top_k'] = 1
+
+    if gen_kwargs.get('repetition_penalty', 1) == 1 and gen_kwargs.get('presence_penalty', 0.0) != 0.0:
+        # then user using presence_penalty, convert to repetition_penalty for h2oGPT
+        # presence_penalty=(repetition_penalty - 1.0) * 2.0 + 0.0,  # so good default
+        gen_kwargs['repetition_penalty'] = 0.5 * (gen_kwargs['presence_penalty'] - 0.0) + 1.0
 
     kwargs.update(**gen_kwargs)
 
     # concurrent gradio client
-    client = get_client()
+    client = get_client(user=gen_kwargs.get('user'))
 
     if stream_output:
         job = client.submit(str(dict(kwargs)), api_name='/submit_nochat_api')
         job_outputs_num = 0
         last_response = ''
         while not job.done():
-            outputs_list = job.communicator.job.outputs
+            outputs_list = job.outputs().copy()
             job_outputs_num_new = len(outputs_list[job_outputs_num:])
             for num in range(job_outputs_num_new):
                 res = outputs_list[job_outputs_num + num]
                 res = ast.literal_eval(res)
                 if verbose:
                     logger.info('Stream %d: %s\n\n %s\n\n' % (num, res['response'], res))
-                else:
                     logger.info('Stream %d' % (job_outputs_num + num))
                 response = res['response']
                 chunk = response[len(last_response):]
@@ -106,7 +165,7 @@ def get_response(instruction, gen_kwargs, verbose=False, chunk_response=True, st
             job_outputs_num += job_outputs_num_new
             time.sleep(0.01)
 
-        outputs_list = job.outputs()
+        outputs_list = job.outputs().copy()
         job_outputs_num_new = len(outputs_list[job_outputs_num:])
         res = {}
         for num in range(job_outputs_num_new):
@@ -114,7 +173,6 @@ def get_response(instruction, gen_kwargs, verbose=False, chunk_response=True, st
             res = ast.literal_eval(res)
             if verbose:
                 logger.info('Final Stream %d: %s\n\n%s\n\n' % (num, res['response'], res))
-            else:
                 logger.info('Final Stream %d' % (job_outputs_num + num))
             response = res['response']
             chunk = response[len(last_response):]
@@ -125,55 +183,12 @@ def get_response(instruction, gen_kwargs, verbose=False, chunk_response=True, st
                 yield response
             last_response = response
         job_outputs_num += job_outputs_num_new
-        logger.info("total job_outputs_num=%d" % job_outputs_num)
+        if verbose:
+            logger.info("total job_outputs_num=%d" % job_outputs_num)
     else:
         res = client.predict(str(dict(kwargs)), api_name='/submit_nochat_api')
         res = ast.literal_eval(res)
         yield res['response']
-
-
-def convert_messages_to_structure(messages):
-    """
-    Convert a list of messages with roles and content into a structured format.
-
-    Parameters:
-    messages (list of dicts): A list where each dict contains 'role' and 'content' keys.
-
-    Variables:
-    structure: dict: A dictionary with 'instruction', 'system_message', and 'history' keys.
-
-    Returns
-    """
-    structure = {
-        "instruction": None,
-        "system_message": None,
-        "history": []
-    }
-
-    for message in messages:
-        role = message.get("role")
-        assert role, "Missing role"
-        content = message.get("content")
-        assert content, "Missing content"
-
-        if role == "function":
-            raise NotImplementedError("role: function not implemented")
-        if role == "user" and structure["instruction"] is None:
-            # The first user message is considered as the instruction
-            structure["instruction"] = content
-        elif role == "system" and structure["system_message"] is None:
-            # The first system message is considered as the system message
-            structure["system_message"] = content
-        elif role == "user" or role == "assistant":
-            # All subsequent user and assistant messages are part of the history
-            if structure["history"] and structure["history"][-1][0] == "user" and role == "assistant":
-                # Pair the assistant response with the last user message
-                structure["history"][-1] = (structure["history"][-1][1], content)
-            else:
-                # Add a new pair to the history
-                structure["history"].append(("user", content) if role == "user" else ("assistant", content))
-
-    return structure['instruction'], structure['system_message'], structure['history']
 
 
 def chat_completion_action(body: dict, stream_output=False) -> dict:
@@ -184,8 +199,6 @@ def chat_completion_action(body: dict, stream_output=False) -> dict:
     resp_list = 'choices'
 
     gen_kwargs = body
-    gen_kwargs['max_new_tokens'] = body.pop('max_tokens')
-
     instruction, system_message, history = convert_messages_to_structure(messages)
     gen_kwargs.update({
         'system_prompt': system_message,

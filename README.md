@@ -26,7 +26,7 @@ Query and summarize your documents or just chat with local private GPT LLMs usin
 - **Linux, Docker, macOS, and Windows** support
   - [**Easy Windows Installer**](#windows-1011-64-bit-with-full-document-qa-capability) for Windows 10 64-bit (CPU/CUDA)
   - [**Easy macOS Installer**](#macos-cpum1m2-with-full-document-qa-capability) for macOS (CPU/M1/M2)
-- **Inference Servers** support (HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI, Anthropic)
+- **Inference Servers** support (oLLaMa, HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI, Anthropic)
 - **OpenAI-compliant**
   - Server Proxy API (h2oGPT acts as drop-in-replacement to OpenAI server)
   - Python client API (to talk to Gradio server)
@@ -50,53 +50,93 @@ To quickly try out h2oGPT with limited document Q/A capability, create a fresh P
    # for windows/mac use "set" or relevant environment setting mechanism
    export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cpu"
    ```
-* Linux/Windows CUDA:
+* Linux/Windows CPU/CUDA/ROC:
    ```bash
    # for windows/mac use "set" or relevant environment setting mechanism
-   export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu118"
+   export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu121 https://huggingface.github.io/autogptq-index/whl/cu121"
+   # for cu118 use export PIP_EXTRA_INDEX_URL="https://download.pytorch.org/whl/cu118 https://huggingface.github.io/autogptq-index/whl/cu118"
    ```
-Then do on any system:
+Then choose your llama_cpp_python options, by changing `CMAKE_ARGS` to whichever system you have according to [llama_cpp_python backend documentation](https://github.com/abetlen/llama-cpp-python?tab=readme-ov-file#supported-backends).
+E.g. CUDA on Linux:
+```bash
+export LLAMA_CUBLAS=1
+export CMAKE_ARGS="-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all"
+export FORCE_CMAKE=1
+```
+Note for some reason things will fail with llama_cpp_python if don't add all cuda arches, and building with all those arches does take some time.
+Windows CUDA:
+```cmdline
+set CMAKE_ARGS=-DLLAMA_CUBLAS=on -DCMAKE_CUDA_ARCHITECTURES=all
+set LLAMA_CUBLAS=1
+set FORCE_CMAKE=1
+```
+Note for some reason things will fail with llama_cpp_python if don't add all cuda arches, and building with all those arches does take some time.
+Metal M1/M2:
+```bash
+export CMAKE_ARGS="-DLLAMA_METAL=on"
+export FORCE_CMAKE=1
+```
+
+Then run the following commands on any system:
    ```bash
    git clone https://github.com/h2oai/h2ogpt.git
    cd h2ogpt
    pip install -r requirements.txt
    pip install -r reqs_optional/requirements_optional_langchain.txt
-   pip install -r reqs_optional/requirements_optional_gpt4all.txt
+
+   pip uninstall llama_cpp_python llama_cpp_python_cuda -y
+   pip install -r reqs_optional/requirements_optional_llamacpp_gpt4all.txt --no-cache-dir
+
    pip install -r reqs_optional/requirements_optional_langchain.urls.txt
    # GPL, only run next line if that is ok:
-   # pip install -r reqs_optional/requirements_optional_langchain.gpllike.txt
+   pip install -r reqs_optional/requirements_optional_langchain.gpllike.txt
 
    python generate.py --base_model=TheBloke/zephyr-7B-beta-GGUF --prompt_type=zephyr --max_seq_len=4096
    ```
-then go to your browser by visiting [http://127.0.0.1:7860](http://127.0.0.1:7860) or [http://localhost:7860](http://localhost:7860).  Choose 13B for a better model than 7B.
-If you encounter issues with `llama-cpp-python` or other packages that try to compile and fail, try binary wheels for your platform as linked in the detailed instructions below.  For AVX1 or AMD ROC systems, edit `reqs_optional/requirements_optional_gpt4all.txt` to choose valid packages.
+Next, go to your browser by visiting [http://127.0.0.1:7860](http://127.0.0.1:7860) or [http://localhost:7860](http://localhost:7860).  Choose 13B for a better model than 7B.
 
 We recommend quantized models for most small-GPU systems, e.g. [LLaMa-2-7B-Chat-GGUF](https://huggingface.co/TheBloke/Llama-2-7b-Chat-GGUF/resolve/main/llama-2-7b-chat.Q6_K.gguf) for 9GB+ GPU memory or larger models like [LLaMa-2-13B-Chat-GGUF](https://huggingface.co/TheBloke/Llama-2-7b-Chat-GGUF/resolve/main/llama-2-13b-chat.Q6_K.gguf) if you have 16GB+ GPU memory.
 
+See [Offline](docs/README_offline.md#tldr) for how to run h2oGPT offline.
+
 ---
 
+Note that for all platforms, some packages such as DocTR, Unstructured, BLIP, Stable Diffusion, etc. download models at runtime that appear to delay operations in the UI. The progress appears in the console logs.
+
 #### Windows 10/11 64-bit with full document Q/A capability
-  * One-click Installers
-
-    Nov 05, 2023:
-    * [h2oGPT GPU-CUDA Installer](https://h2o-release.s3.amazonaws.com/h2ogpt/Nov2023/h2oGPT_0.0.1_gpu.exe) (1.9GB file)
-    * [h2oGPT CPU Installer](https://h2o-release.s3.amazonaws.com/h2ogpt/Nov2023/h2oGPT_0.0.1_cpu.exe) (850MB file)
-
-    Oct 06, 2023:
-    * [h2oGPT GPU-CUDA Installer](https://h2o-release.s3.amazonaws.com/h2ogpt/Oct2023/h2oGPT_0.0.1_gpu.exe) (1.9GB file)
-    * [h2oGPT CPU Installer](https://h2o-release.s3.amazonaws.com/h2ogpt/Oct2023/h2oGPT_0.0.1_cpu.exe) (800MB file)
-
-    Aug 19, 2023:
-    * [h2oGPT GPU-CUDA Installer](https://h2o-release.s3.amazonaws.com/h2ogpt/h2oGPT_0.0.1_gpu.exe) (1.8GB file)
-    * [h2oGPT CPU Installer](https://h2o-release.s3.amazonaws.com/h2ogpt/h2oGPT_0.0.1_cpu.exe) (755MB file)
-
-    The installers include all dependencies for document Q/A except for models (LLM, embedding, reward), which you can download through the UI.  After installation, go to start and run h2oGPT, and a web browser will open for h2oGPT.  To use LLaMa model, go to Models tab, select `llama` base model, then click load to download from preset URL.  Then use as normal.  To terminate the app, in task manager kill the `Python` process named `pythonw.exe` as will also show up in `nvidia-smi` if using GPUs.  Set environment variables (in system properties->advanced->environment variables) to control things:
+  * One-Click Installer
+    * CPU or GPU: Download [h2oGPT Windows Installer](https://h2o-release.s3.amazonaws.com/h2ogpt/Jan2024/h2oGPT_0.0.1.exe) (1.3GB file)
+      * Once installed, feel free to change start directory for icon from `%HOMEDRIVE%\%HOMEPATH%` to (e.g.) `%HOMEDRIVE%\%HOMEPATH%\h2ogpt_data` so all created files (like database) go there.  All paths saved are relative to this path.
+    * CPU: Click the h2oGPT icon in the Start menu.  Give it about 15 seconds to open in a browser if many optional packages are included.  By default, the browser will launch with the actual local IP address, not localhost.
+    * GPU: Before starting, run the following commands (replace `pseud` with your user):
+      ```
+      C:\Users\pseud\AppData\Local\Programs\h2oGPT\Python\python.exe -m pip uninstall -y torch
+      C:\Users\pseud\AppData\Local\Programs\h2oGPT\Python\python.exe -m pip install https://h2o-release.s3.amazonaws.com/h2ogpt/torch-2.1.2%2Bcu118-cp310-cp310-win_amd64.whl
+      ```
+      Now click the h2oGPT icon in the Start menu.  Give it about 20 seconds to open in a browser if many optional packages are included.  By default, the browser will launch with the actual local IP address, not localhost.
+      * Some other users may have python located here: `C:\Program Files (x86)\h2oGPT\Python\python.exe`.
+    * To debug any issues, run the following (replace `pseud` with your user):
+      ```
+      C:\Users\pseud\AppData\Local\Programs\h2oGPT\Python\python.exe "C:\Users\pseud\AppData\Local\Programs\h2oGPT\h2oGPT.launch.pyw"
+      ```
+      Any start-up exceptions are appended to log, e.g. `C:\Users\pseud\h2ogpt_exception.log`.
+  * To control startup, tweak the python startup file, e.g. for user `pseud`: `C:\Users\pseud\AppData\Local\Programs\h2oGPT\pkgs\win_run_app.py`
+    * In this Python code, set ENVs anywhere before main_h2ogpt() is called
+      * E.g. `os.environ['name'] = 'value'`, e.g. `os.environ['n_jobs'] = '10'` (must be always a string).
+    * Environment variables can be changed, e.g.:
       * `n_jobs`: number of cores for various tasks
       * `OMP_NUM_THREADS` thread count for LLaMa
       * `CUDA_VISIBLE_DEVICES` which GPUs are used.  Recommend set to single fast GPU, e.g. `CUDA_VISIBLE_DEVICES=0` if have multiple GPUs.  Note that UI cannot control which GPUs (or CPU mode) for LLaMa models.
       * Any CLI argument from `python generate.py --help` with environment variable set as `h2ogpt_x`, e.g. `h2ogpt_h2ocolors` to `False`.
       * Set env `h2ogpt_server_name` to actual IP address for LAN to see app, e.g. `h2ogpt_server_name` to `192.168.1.172` and allow access through firewall if have Windows Defender activated.
-  * [Windows 10/11 Manual Install and Run Docs](docs/README_WINDOWS.md)
+  * One can tweak installed h2oGPT code at, e.g. `C:\Users\pseud\AppData\Local\Programs\h2oGPT`.
+  * To terminate the app, go to System Tab and click Admin and click Shutdown h2oGPT.
+    * If startup fails, run as console and check for errors, e.g. and kill any old Python processes.
+
+  * [Full Windows 10/11 Manual Installation Script](docs/README_WINDOWS.md)
+    * Single `.bat` file for installation (if you do not skip any optional packages, takes about 9GB filled on disk).
+    * Recommend base Conda env, which allows for DocTR that requires pygobject that has otherwise no support (except `mysys2` that cannot be used by h2oGPT).
+    * Also allows for the TTS package by Coqui, which is otherwise not currently enabled in the one-click installer.
 
 ---
 
@@ -107,8 +147,12 @@ We recommend quantized models for most small-GPU systems, e.g. [LLaMa-2-7B-Chat-
 ---
 
 #### macOS (CPU/M1/M2) with full document Q/A capability
-* One-click Installers (Experimental and subject to changes)
+* One-click Installers (Experimental and subject to changes, we haven't tested each and every feature with these installers, we encourage the community to try them and report any issues)
 
+  Mar 07, 2024
+  - [h2ogpt-osx-m1-cpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Mar2024/h2ogpt-osx-m1-cpu)
+  - [h2ogpt-osx-m1-gpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Mar2024/h2ogpt-osx-m1-gpu)
+  
   Nov 08, 2023
   - [h2ogpt-osx-m1-cpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Nov2023/h2ogpt-osx-m1-cpu)
   - [h2ogpt-osx-m1-gpu](https://h2o-release.s3.amazonaws.com/h2ogpt/Nov2023/h2ogpt-osx-m1-gpu)
@@ -182,8 +226,8 @@ YouTube 4K version: https://www.youtube.com/watch?v=_iktbj4obAI
    * [CLI chat](docs/README_CLI.md)
    * [Gradio UI](docs/README_ui.md)
    * [Client API (Gradio, OpenAI-Compliant)](docs/README_CLIENT.md)
-   * [Inference Servers (HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI)](docs/README_InferenceServers.md)
-   * [Python Wheel](docs/README_WHEEL.md)
+   * [Inference Servers (oLLaMa, HF TGI server, vLLM, Gradio, ExLLaMa, Replicate, OpenAI, Azure OpenAI)](docs/README_InferenceServers.md)
+   * [Build Python Wheel](docs/README_WHEEL.md)
    * [Offline Installation](docs/README_offline.md)
    * [Low Memory](docs/FAQ.md#low-memory-mode)
    * [Docker](docs/README_DOCKER.md)
@@ -231,8 +275,10 @@ These are not part of normal installation instructions and are experimental.
 - To fine-tune any LLM models on your data, follow the [fine-tuning instructions](docs/FINETUNE.md).
 - To run h2oGPT tests:
     ```bash
-    pip install requirements-parser pytest-instafail pytest-random-order
-    pip install playsound==1.3.0
+    pip install requirements-parser pytest-instafail pytest-random-order playsound==1.3.0
+    conda install -c conda-forge gst-python
+    sudo apt-get install gstreamer-1.0
+    pip install pygame
     pytest --instafail -s -v tests
     # for client tests
     make -C client setup

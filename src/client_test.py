@@ -94,6 +94,7 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
              max_time=20,
              repetition_penalty=1.0,
              do_sample=True,
+             metadata_in_context=[],
              ):
     from collections import OrderedDict
     kwargs = OrderedDict(instruction=prompt if chat else '',  # only for chat=True
@@ -159,29 +160,24 @@ def get_args(prompt, prompt_type=None, chat=False, stream_output=False,
                          hyde_template=None,
                          hyde_show_only_final=False,
                          doc_json_mode=False,
+                         metadata_in_context=metadata_in_context,
 
                          chatbot_role='None',
                          speaker='None',
                          tts_language='autodetect',
                          tts_speed=1.0,
+
+                         image_file=None,
+                         image_control=None,
                          )
     diff = 0
-    if version is None:
-        # latest
-        version = 1
-    if version == 0:
-        diff = 1
-    if version >= 1:
-        kwargs.update(dict(system_prompt=system_prompt))
-        diff = 0
-
     from evaluate_params import eval_func_param_names
     assert len(set(eval_func_param_names).difference(set(list(kwargs.keys())))) == diff
     if chat:
         # add chatbot output on end.  Assumes serialize=False
         kwargs.update(dict(chatbot=[]))
 
-    return kwargs, list(kwargs.values())
+    return kwargs, list(dict(kwargs).values())
 
 
 @pytest.mark.skip(reason="For manual use against some server, no server launched")
@@ -447,7 +443,7 @@ def run_client(client, prompt, args, kwargs, do_md_to_text=True, verbose=False):
         kwargs['append_sources_to_chat'] = False
         kwargs['show_link_in_sources'] = True
         res_dict, client = run_client_gen(client, kwargs, do_md_to_text=do_md_to_text)
-        res_dict['response'] += str(res_dict['sources_str'])
+        res_dict['response'] += str(res_dict.get('sources_str', ''))
         return res_dict, client
         # FIXME: https://github.com/gradio-app/gradio/issues/6592
 
@@ -466,14 +462,14 @@ def run_client(client, prompt, args, kwargs, do_md_to_text=True, verbose=False):
         job = client.submit(*tuple(args), api_name='/instruction_bot')
         res1 = ''
         while not job.done():
-            outputs_list = job.communicator.job.outputs
+            outputs_list = job.outputs().copy()
             if outputs_list:
-                res = job.communicator.job.outputs[-1]
+                res = outputs_list[-1]
                 res1 = res[0][-1][-1]
                 res1 = md_to_text(res1, do_md_to_text=do_md_to_text)
                 print(res1)
             time.sleep(0.1)
-        full_outputs = job.outputs()
+        full_outputs = job.outputs().copy()
         if verbose:
             print('job.outputs: %s' % str(full_outputs))
         # ensure get ending to avoid race
@@ -520,13 +516,13 @@ def run_client_gen(client, kwargs, do_md_to_text=True):
     else:
         job = client.submit(str(dict(kwargs)), api_name='/submit_nochat_api')
         while not job.done():
-            outputs_list = job.communicator.job.outputs
+            outputs_list = job.outputs().copy()
             if outputs_list:
-                res = job.communicator.job.outputs[-1]
+                res = outputs_list[-1]
                 res_dict1 = ast.literal_eval(res)
                 print('Stream: %s' % res_dict1['response'])
             time.sleep(0.1)
-        res_list = job.outputs()
+        res_list = job.outputs().copy()
         assert len(res_list) > 0, "No response, check server"
         res = res_list[-1]
         res_dict1 = ast.literal_eval(res)

@@ -61,6 +61,18 @@ class PromptType(Enum):
     google = 55
     docsgpt = 56
     open_chat_math = 57
+    mistralai = 58
+    mixtral = 59
+    mixtralnosys = 60
+    orion = 61
+    sciphi = 62
+    beacon = 63
+    beacon2 = 64
+    llava = 65
+    danube = 66
+    gemma = 67
+    qwen = 68
+    sealion = 69
 
 
 class DocumentSubset(Enum):
@@ -146,7 +158,7 @@ class LangChainAgent(Enum):
     AUTOGPT = 'AUTOGPT'
 
 
-no_server_str = no_lora_str = no_model_str = '[None/Remove]'
+no_server_str = no_lora_str = no_model_str = '[]'
 
 # from site-packages/langchain/llms/openai.py
 # but needed since ChatOpenAI doesn't have this information
@@ -187,7 +199,9 @@ anthropic_mapping = {
     "claude-2.1": 200000,
     "claude-2": 100000,
     "claude-2.0": 100000,
-    "claude-instant-1.2": 100000
+    "claude-instant-1.2": 100000,
+    "claude-3-opus-20240229": 200000,
+    "claude-3-sonnet-20240229": 200000,
 }
 
 anthropic_mapping_outputs = {
@@ -195,6 +209,8 @@ anthropic_mapping_outputs = {
     "claude-2": 4096,
     "claude-2.0": 4096,
     "claude-instant-1.2": 4096,
+    "claude-3-opus-20240229": 4096,
+    "claude-3-sonnet-20240229": 4096,
 }
 
 google_mapping = {
@@ -206,6 +222,28 @@ google_mapping = {
 google_mapping_outputs = {
     "gemini-pro": 8192,
     "gemini-pro-vision": 2048,
+}
+
+mistralai_mapping = {
+    "mistral-large-latest": 32768,
+    "mistral-medium": 32768,
+    "mistral-small": 32768,
+    "mistral-tiny": 32768,
+    'open-mistral-7b': 32768,
+    'open-mixtral-8x7b': 32768,
+    'mistral-small-latest': 32768,
+    'mistral-medium-latest': 32768,
+}
+
+mistralai_mapping_outputs = {
+    "mistral-large-latest": 32768,
+    "mistral-medium": 32768,
+    "mistral-small": 32768,
+    "mistral-tiny": 32768,
+    'open-mistral-7b': 32768,
+    'open-mixtral-8x7b': 32768,
+    'mistral-small-latest': 32768,
+    'mistral-medium-latest': 32768,
 }
 
 openai_supports_functiontools = ["gpt-4-0613", "gpt-4-32k-0613", "gpt-3.5-turbo-0613", "gpt-3.5-turbo-16k-0613",
@@ -263,11 +301,11 @@ def get_langchain_prompts(pre_prompt_query, prompt_query, pre_prompt_summary, pr
                           prompt_query_type='simple'):
     if prompt_query_type == 'advanced':
         pre_prompt_query1 = "Pay attention and remember the information below, which will help to answer the question or imperative after the context ends.  If the answer cannot be primarily obtained from information within the context, then respond that the answer does not appear in the context of the documents."
-        prompt_query1 = "According to (primarily) the information in the document sources provided within context above: "
+        prompt_query1 = "According to (primarily) the information in the document sources provided within context above, write an insightful and well-structured response to: "
     else:
         # older smaller models get confused by this prompt, should use "" instead, but not focusing on such old models anymore, complicates code too much
         pre_prompt_query1 = "Pay attention and remember the information below, which will help to answer the question or imperative after the context ends."
-        prompt_query1 = "According to only the information in the document sources provided within the context above: "
+        prompt_query1 = "According to only the information in the document sources provided within the context above, write an insightful and well-structured response to: "
 
     pre_prompt_summary1 = """In order to write a concise single-paragraph or bulleted list summary, pay attention to the following text."""
     prompt_summary1 = "Using only the information in the document sources above, write a condensed and concise summary of key results (preferably as bullet points)."
@@ -359,7 +397,7 @@ docs_ordering_types = ['best_first', 'best_near_prompt', 'reverse_ucurve_sort']
 
 docs_token_handlings = ['chunk', 'split_or_merge']
 
-docs_ordering_types_default = 'reverse_ucurve_sort'
+docs_ordering_types_default = 'best_near_prompt'
 docs_token_handling_default = 'split_or_merge'
 docs_joiner_default = '\n\n'
 
@@ -459,3 +497,5 @@ max_chunks_per_doc_public = 5000
 max_chunks_per_doc_public_api = 2 * max_chunks_per_doc_public
 
 user_prompt_for_fake_system_prompt = "Who are you and what do you do?"
+
+coqui_lock_name = 'coqui'

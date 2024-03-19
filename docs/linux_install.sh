@@ -28,6 +28,7 @@ pip install -r requirements.txt -c reqs_optional/reqs_constraints.txt
 #* Optional: Install document question-answer dependencies:
 #
 # May be required for jq package:
+sudo apt-get update -y
 sudo apt-get -y install autoconf libtool
 # Required for Doc Q/A: LangChain:
 pip install -r reqs_optional/requirements_optional_langchain.txt -c reqs_optional/reqs_constraints.txt
@@ -123,7 +124,8 @@ fi
 #fi
 
 # upgrade chrome to latest
-mkdir -p /etc/apt/keyrings/
+sudo mkdir -p /etc/apt/keyrings/
+sudo rm -rf /tmp/google.pub
 sudo wget https://dl-ssl.google.com/linux/linux_signing_key.pub -O /tmp/google.pub
 sudo gpg --no-default-keyring --keyring /etc/apt/keyrings/google-chrome.gpg --import /tmp/google.pub
 sudo echo 'deb [arch=amd64 signed-by=/etc/apt/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main' | sudo tee /etc/apt/sources.list.d/google-chrome.list
@@ -152,8 +154,7 @@ pip install optimum==1.16.1 -c reqs_optional/reqs_constraints.txt
 
 #
 #* GPU Optional: For AutoAWQ support on x86_64 linux
-#
-pip uninstall -y autoawq ; pip install https://github.com/casper-hansen/AutoAWQ/releases/download/v0.1.8/autoawq-0.1.8-cp310-cp310-linux_x86_64.whl -c reqs_optional/reqs_constraints.txt
+pip uninstall -y autoawq ; pip install autoawq -c reqs_optional/reqs_constraints.txt
 # fix version since don't need lm-eval to have its version of 1.5.0
 pip install sacrebleu==2.3.1 --upgrade -c reqs_optional/reqs_constraints.txt
 #    If this has issues, you need to build:
@@ -211,6 +212,10 @@ pip install https://h2o-release.s3.amazonaws.com/h2ogpt/duckdb-0.8.2.dev4025%2Bg
 #
 pip install -r reqs_optional/requirements_optional_agents.txt -c reqs_optional/reqs_constraints.txt
 #  For more info see [SERP Docs](README_SerpAPI.md).
+
+
+# https://github.com/h2oai/h2ogpt/issues/1483
+pip uninstall flash_attn autoawq autoawq-kernels -y && pip install flash_attn autoawq autoawq-kernels --no-cache-dir
 
 
 bash ./docs/run_patches.sh

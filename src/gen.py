@@ -300,6 +300,7 @@ def main(
         auth_access: str = 'open',
         auth_freeze: bool = False,
         auth_message: str = None,
+        google_auth: bool = False,
         guest_name: str = "guest",
         enforce_h2ogpt_api_key: bool = None,
         enforce_h2ogpt_ui_key: bool = None,
@@ -843,6 +844,7 @@ def main(
          'closed': Stick to existing users
     :param auth_freeze: whether freeze authentication based upon current file, no longer update file
     :param auth_message: Message to show if having users login, fixed if passed, else dynamic internally
+    :param google_auth: Whether to use google auth
     :param guest_name: guess name if using auth and have open access.
            If '', then no guest allowed even if open access, then all databases for each user always persisted
     :param enforce_h2ogpt_api_key: Whether to enforce h2oGPT token usage for API
@@ -1004,6 +1006,7 @@ def main(
                     'chroma' (for chroma >= 0.4)
                     'chroma_old' (for chroma < 0.4) -- recommended for large collections
                     'weaviate' for persisted on disk
+                    'qdrant' for a Qdrant server or an in-memory instance
     :param use_openai_embedding: Whether to use OpenAI embeddings for vector db
     :param use_openai_model: Whether to use OpenAI model for use with vector db
     :param hf_embedding_model: Which HF embedding model to use for vector db
@@ -1174,7 +1177,7 @@ def main(
            None means no such LLaVa support
     :param llava_prompt: Prompt passed to LLaVa for querying the image
 
-    :param image_file: Initial image for UI (or actual image for CLI) Vision Q/A
+    :param image_file: Initial image for UI (or actual image for CLI) Vision Q/A.  Or list of images for some models
     :param image_control: Initial image for UI Image Control
 
     :param asr_model: Name of model for ASR, e.g. openai/whisper-medium or openai/whisper-large-v3 or distil-whisper/distil-large-v2 or microsoft/speecht5_asr
@@ -3952,7 +3955,6 @@ def evaluate(
     # Note: Could do below, but for now gradio way can control do_sample directly
     # elif temperature >= 0.01:
     #     do_sample = True
-    temperature = min(max(0.01, temperature), 2.0)
     max_input_tokens = int(max_input_tokens) if max_input_tokens is not None else -1
     max_total_input_tokens = int(max_total_input_tokens) if max_total_input_tokens is not None else -1
     # FIXME: https://github.com/h2oai/h2ogpt/issues/106
@@ -4340,7 +4342,7 @@ def evaluate(
             stop_sequences = [x for x in stop_sequences if x]
             # OpenAI will complain if ask for too many new tokens, takes it as min in some sense, wrongly so.
             max_new_tokens_openai = min(max_new_tokens, model_max_length - num_prompt_tokens)
-            gen_server_kwargs = dict(temperature=temperature if do_sample else 0.001,
+            gen_server_kwargs = dict(temperature=temperature if do_sample else 0,
                                      max_tokens=max_new_tokens_openai,
                                      top_p=top_p if do_sample else 1,
                                      frequency_penalty=0,
@@ -4681,9 +4683,9 @@ def evaluate(
                                              return_full_text=False,
                                              seed=seed,
                                              stop_sequences=stop_sequences,
-                                             temperature=temperature,
+                                             temperature=max(1e-2, temperature),
                                              top_k=top_k,
-                                             top_p=min(max(1e-3, top_p), 1.0 - 1e-3),
+                                             top_p=min(max(1e-2, top_p), 1.0 - 1e-3),
                                              # truncate=False,  # behaves oddly
                                              # typical_p=top_p,
                                              # watermark=False,
@@ -6001,7 +6003,8 @@ def get_limited_prompt(instruction,
         reduced = context_from_history
         prompt = prompter.generate_prompt(data_point, context_from_history=context_from_history, reduced=reduced)
     else:
-        prompt = context
+        # assume inner gradio server handles.  if we point to gradio server (i.e. gradio_server=True) then we just pass instruction
+        prompt = instruction if gradio_server else context2
     num_prompt_tokens_actual = get_token_count(prompt, tokenizer)
 
     return prompt, \

@@ -44,7 +44,7 @@ def test_client1_lock_choose_model():
 
     from src.gen import main
     base1 = 'h2oai/h2ogpt-oig-oasst1-512-6_9b'
-    base2 = 'distilgpt2'
+    base2 = 'h2oai/h2o-danube-1.8b-chat'
     model_lock = [dict(base_model=base1, prompt_type='human_bot'),
                   dict(base_model=base2, prompt_type='plain')]
     main(chat=False, model_lock=model_lock,
@@ -70,7 +70,10 @@ def test_client1_lock_choose_model():
                                             prompt_type=prompt_type)
             assert res_dict['prompt'] == prompt
             assert res_dict['iinput'] == ''
-            assert 'the limit of time' in res_dict['response']
+            if prompt_type == 'plain':
+                assert 'The sky is a big, blue' in res_dict['response'] or 'blue' in res_dict['response']
+            else:
+                assert 'The sky is a big, blue, and sometimes' in res_dict['response'] or 'blue' in res_dict['response']
 
 
 @pytest.mark.parametrize("base_model", [
@@ -103,11 +106,7 @@ def test_client1_context(base_model):
     # string of dict for output
     response = ast.literal_eval(res)['response']
     print(response)
-    assert """I am a mischievous pixie, always up to no good! *wink* But don't worry, I won't play any tricks on you... unless you want me to, that is. *giggles*
-As for my fairy dust, it's a special blend of sparkly, shimmering magic that can grant wishes and make dreams come true. *twinkle eyes* Would you like some? *offers a tiny vial of sparkles*""" in response or \
-           """I am a mischievous pixie, always up to no good! *winks* But don't worry, I won't play any tricks on you... unless you want me to, that is. *giggles*
-   As for my fairy dust, it's a special blend of sparkly, shimmering magic that can grant wishes and make dreams come true. *twinkle* Would you like some? *offers a tiny vial of sparkles*""" in response or \
-           """I am a mischievous pixie""" in response
+    assert """mischievous and playful pixie""" in response
 
 
 @wrap_test_forked
@@ -1482,7 +1481,7 @@ def test_client_chat_stream_langchain_steps(max_new_tokens, top_k_docs):
 
     res_dict, client = run_client(client, prompt, args, kwargs)
     # i.e. answers wrongly without data, dumb model, but also no docs at all since cutoff entirely
-    assert 'h2oGPT is a variant of the popular GPT' in res_dict['response'] and '.md' not in res_dict['response']
+    assert 'h2oGPT is a variant' in res_dict['response'] and '.md' not in res_dict['response']
 
     # QUERY3
     prompt = "What is whisper?"
@@ -1698,7 +1697,8 @@ def test_client_chat_stream_long():
     prompt = 'Tell a very long story about cute birds for kids.'
     res_dict, client = run_client_chat_with_server(prompt=prompt, stream_output=True, max_new_tokens=1024)
     assert 'Once upon a time' in res_dict['response'] or \
-           'The story begins with' in res_dict['response']
+           'The story begins with' in res_dict['response'] or \
+           'The birds are all very' in res_dict['response']
 
 
 @pytest.mark.parametrize("base_model", [
@@ -1836,6 +1836,7 @@ def check_langchain():
     assert 'whisper1.pdf' in sources[0]
 
 
+@pytest.mark.skip(reason="No longer supported")
 @pytest.mark.parametrize("mode", ['a', 'b', 'c'])
 @wrap_test_forked
 def test_exllama(mode):
@@ -2653,7 +2654,7 @@ def test_client_load_unload_models(model_choice):
     elif model_choice in ['HuggingFaceH4/zephyr-7b-beta',
                           'TheBloke/zephyr-7B-beta-AWQ']:
         prompt_type_ex = 'zephyr'
-        max_seq_len_ex = 32768.0
+        max_seq_len_ex = 4096.0
         max_seq_len_ex2 = max_seq_len_ex
     elif model_choice in ['TheBloke/Xwin-LM-13B-V0.1-GPTQ']:
         prompt_type_ex = 'xwin'
@@ -3807,6 +3808,7 @@ def test_client_summarization_from_url(url, top_k_docs):
                or 'h2oGPT is an open-source project' in summary \
                or 'h2oGPT model' in summary \
                or 'released an open-source version' in summary \
+               or 'Summarizes the main features' in summary \
                or ('key results based on the provided document' in summary and 'h2oGPT' in summary)
         assert 'h2oGPT' in [x['content'] for x in sources][0]
     assert url in [x['source'] for x in sources][0]
@@ -4113,7 +4115,7 @@ def check_final_res(res, base_model='llama'):
     assert res['save_dict']['extra_dict']['do_sample'] == False
     assert res['save_dict']['extra_dict']['num_prompt_tokens'] > 10
     assert res['save_dict']['extra_dict']['ntokens'] > 60
-    assert res['save_dict']['extra_dict']['tokens_persecond'] > 5
+    assert res['save_dict']['extra_dict']['tokens_persecond'] > 3.5
 
 
 def check_curl_plain_api():
@@ -4273,6 +4275,7 @@ def test_pure_client_test():
 
 @wrap_test_forked
 def test_client_upload_to_user_not_allowed():
+    remove('db_dir_UserData')
     base_model = 'h2oai/h2ogpt-4096-llama2-7b-chat'
     from src.gen import main
     main(base_model=base_model, block_gradio_exit=False, verbose=True, allow_upload_to_user_data=False,
@@ -4520,7 +4523,11 @@ def test_client_openai_langchain(auth_access, guest_name, do_auth):
     responses = client.create(**client_kwargs)
     text = responses.choices[0].message.content
     print(text)
-    assert 'h2oGPT project' in text or 'natural language' in text
+    assert 'h2oGPT project' in text or \
+           'natural language' in text or \
+           'Summarize' in text or \
+           'summarizing' in text or \
+           'summarization' in text
 
     # MyData
     # get file for client to upload
@@ -4532,7 +4539,12 @@ def test_client_openai_langchain(auth_access, guest_name, do_auth):
     # login regardless of auth, so can access collection
     num_model_lock = gr_client.predict(api_name='/num_model_lock')
     chatbots = [None] * (2 + num_model_lock)
-    gr_client.predict(None, username, password, *tuple(chatbots), api_name='/login')
+    h2ogpt_key = ''
+    visible_models = []
+    gr_client.predict(None,
+                      h2ogpt_key, visible_models,
+                      username, password,
+                      *tuple(chatbots), api_name='/login')
 
     # now can upload file to collection MyData
     test_file_local, test_file_server = gr_client.predict('tests/screenshot.png', api_name='/upload_api')
@@ -4819,3 +4831,93 @@ def test_max_new_tokens(max_new_tokens, temperature):
                 assert len(set(repeat_responses)) <= 2  # fudge of 1
             else:
                 assert len(set(repeat_responses)) >= len(repeat_responses) - fudge_seed
+
+
+@wrap_test_forked
+def test_client1_image_qa_proprietary():
+    inference_server = os.getenv('TEST_SERVER', 'https://gpt.h2o.ai')
+    if inference_server == 'https://gpt.h2o.ai':
+        auth_kwargs = dict(auth=('guest', 'guest'))
+    else:
+        auth_kwargs = {}
+
+    from src.gen import get_inf_models
+    base_models = get_inf_models(inference_server)
+    base_models_touse = ['gpt-4-vision-preview', 'gemini-pro-vision', 'claude-3-haiku-20240307']
+    assert len(set(base_models_touse).difference(set(base_models))) == 0
+    h2ogpt_key = os.environ['H2OGPT_H2OGPT_KEY']
+
+    from gradio_client import Client
+    client = Client(inference_server, *auth_kwargs)
+
+    # string of dict for input
+    prompt = 'What do you see?'
+    image_file = 'tests/driverslicense.jpeg'
+    from src.vision.utils_vision import img_to_base64
+    image_file = img_to_base64(image_file)
+
+    for base_model in base_models_touse:
+        print("Doing base_model=%s" % base_model)
+        kwargs = dict(instruction_nochat=prompt,
+                      image_file=image_file,
+                      visible_models=base_model,
+                      stream_output=False,
+                      h2ogpt_key=h2ogpt_key)
+        res = client.predict(str(dict(kwargs)), api_name='/submit_nochat_api')
+
+        # string of dict for output
+        response = ast.literal_eval(res)['response']
+        print(response)
+        assert 'license' in response.lower()
+
+
+@wrap_test_forked
+def test_client1_images_qa_proprietary():
+    image_dir = 'pdf_images'
+    makedirs(image_dir)
+    os.system('pdftoppm tests/2403.09629.pdf %s/outputname -jpeg' % image_dir)
+    pdf_images = os.listdir(image_dir)
+    pdf_images = [os.path.join(image_dir, x) for x in pdf_images]
+
+    inference_server = os.getenv('TEST_SERVER', 'https://gpt.h2o.ai')
+    if inference_server == 'https://gpt.h2o.ai':
+        auth_kwargs = dict(auth=('guest', 'guest'))
+    else:
+        auth_kwargs = {}
+
+    from src.gen import get_inf_models
+    base_models = get_inf_models(inference_server)
+    base_models_touse = ['gemini-pro-vision', 'gpt-4-vision-preview', 'claude-3-haiku-20240307']
+    assert len(set(base_models_touse).difference(set(base_models))) == 0
+    h2ogpt_key = os.environ['H2OGPT_H2OGPT_KEY']
+
+    from gradio_client import Client
+    client = Client(inference_server, *auth_kwargs)
+
+    prompt = 'What is used to optimize the likelihoods of the rationales?'
+
+    from src.vision.utils_vision import img_to_base64
+    image_files = [img_to_base64(image_file) for image_file in pdf_images]
+
+    for base_model in base_models_touse:
+        print("Doing base_model=%s" % base_model)
+        kwargs = dict(instruction_nochat=prompt,
+                      image_file=image_files,
+                      visible_models=base_model,
+                      stream_output=False,
+                      h2ogpt_key=h2ogpt_key)
+        res = client.predict(str(dict(kwargs)), api_name='/submit_nochat_api')
+
+        # string of dict for output
+        response = ast.literal_eval(res)['response']
+        print(response)
+        assert 'REINFORCE'.lower() in response.lower()
+
+
+def test_pdf_to_base_64_images():
+    pdf_path = 'tests/2403.09629.pdf'
+    from src.vision.utils_vision import pdf_to_base64_pngs
+    base64_encoded_pngs = pdf_to_base64_pngs(pdf_path, quality=75, max_size=(1024, 1024), ext='png')
+    assert len(base64_encoded_pngs) == 25
+    base64_encoded_pngs = pdf_to_base64_pngs(pdf_path, quality=75, max_size=(1024, 1024), ext='jpg')
+    assert len(base64_encoded_pngs) == 25

@@ -225,6 +225,18 @@ claude3imagetag = 'claude-3-image'
 gpt4imagetag = 'gpt-4-image'
 geminiimagetag = 'gemini-image'
 
+# https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini
+#  Invalid argument provided to Gemini: 400 Please use fewer than 16 images in your request to models/gemini-pro-vision
+# 4MB *total* limit of any prompt.  But only supports 16 images when doing fileData, needs to point to some gcp location
+geminiimage_num_max = 15
+# https://docs.anthropic.com/claude/docs/vision#image-best-practices
+# https://github.com/anthropics/anthropic-cookbook/blob/main/multimodal/reading_charts_graphs_powerpoints.ipynb
+# 5MB per image
+claude3image_num_max = 20
+# https://platform.openai.com/docs/guides/vision
+# 20MB per image
+gpt4image_num_max = 10
+
 # https://ai.google.dev/models/gemini
 # gemini-1.0-pro
 google_mapping = {
@@ -432,8 +444,8 @@ docs_ordering_types_default = 'best_near_prompt'
 docs_token_handling_default = 'split_or_merge'
 docs_joiner_default = '\n\n'
 
-db_types = ['chroma', 'weaviate']
-db_types_full = ['chroma', 'weaviate', 'faiss']
+db_types = ['chroma', 'weaviate', 'qdrant']
+db_types_full = ['chroma', 'weaviate', 'faiss', 'qdrant']
 
 auto_choices = [None, 'None', 'auto']
 
@@ -530,3 +542,5 @@ max_chunks_per_doc_public_api = 2 * max_chunks_per_doc_public
 user_prompt_for_fake_system_prompt = "Who are you and what do you do?"
 
 coqui_lock_name = 'coqui'
+
+split_google = "::::::::::"

@@ -70,7 +70,8 @@ from enums import DocumentSubset, no_lora_str, model_token_mapping, source_prefi
     super_source_postfix, langchain_modes_intrinsic, get_langchain_prompts, LangChainAgent, docs_joiner_default, \
     docs_ordering_types_default, langchain_modes_non_db, does_support_functiontools, doc_json_mode_system_prompt, \
     auto_choices, max_docs_public, max_chunks_per_doc_public, max_docs_public_api, max_chunks_per_doc_public_api, \
-    user_prompt_for_fake_system_prompt, does_support_json_mode, claude3imagetag, gpt4imagetag, geminiimagetag
+    user_prompt_for_fake_system_prompt, does_support_json_mode, claude3imagetag, gpt4imagetag, geminiimagetag, \
+    geminiimage_num_max, claude3image_num_max, gpt4image_num_max
 from evaluate_params import gen_hyper, gen_hyper0
 from gen import SEED, get_limited_prompt, get_docs_tokens, get_relaxed_max_new_tokens, get_model_retry, gradio_to_llm, \
     get_client_from_inference_server
@@ -154,6 +155,16 @@ def get_db(sources, use_openai_embedding=False, db_type='faiss',
         index_name = collection_name.capitalize()
         db = Weaviate.from_documents(documents=sources, embedding=embedding, client=client, by_text=False,
                                      index_name=index_name)
+    elif db_type == 'qdrant':
+        from langchain.vectorstores import Qdrant
+
+        qdrant_options = _get_qdrant_options()
+
+        if qdrant_options is not None:
+            db = Qdrant.from_documents(documents=sources, embedding=embedding, collection_name=collection_name, **qdrant_options)
+        else:
+            db = Qdrant.from_documents(documents=sources, embedding=embedding, collection_name=collection_name, location=":memory:")
+
     elif db_type in ['chroma', 'chroma_old']:
         assert persist_directory is not None
         # use_base already handled when making persist_directory, unless was passed into get_db()
@@ -301,6 +312,16 @@ def add_to_db(db, sources, db_type='faiss',
         sources_batches = split_list(sources, max_max_batch_size)
         for sources_batch in sources_batches:
             db.add_documents(documents=sources_batch)
+    elif db_type == 'qdrant':
+        if avoid_dup_by_file or avoid_dup_by_content:
+            unique_sources = _get_unique_sources_in_qdrant(db)
+            sources = [x for x in sources if x.metadata['source'] not in unique_sources]
+        num_new_sources = len(sources)
+        if num_new_sources == 0:
+            return db, num_new_sources, []
+        sources_batches = split_list(sources, max_max_batch_size)
+        for sources_batch in sources_batches:
+            db.add_documents(documents=sources_batch)
     elif db_type in ['chroma', 'chroma_old']:
         collection = get_documents(db)
         # files we already have:
@@ -400,6 +421,20 @@ def create_or_update_db(db_type, persist_directory, collection_name,
             client.schema.delete_class(index_name)
             if verbose:
                 print("Removing %s" % index_name, flush=True)
+    if db_type == 'qdrant':
+        from qdrant_client import QdrantClient
+
+        qdrant_options = _get_qdrant_options()
+
+        if qdrant_options is not None:
+            client = QdrantClient(**qdrant_options)
+        else:
+            client = QdrantClient(location=":memory:")
+
+        if client.collection_exists(collection_name):
+            client.delete_collection(collection_name)
+        if verbose:
+                print("Removing %s" % collection_name, flush=True)
     elif db_type in ['chroma', 'chroma_old']:
         pass
 
@@ -1094,11 +1129,11 @@ class H2OHuggingFaceTextGenInference(H2Oagenerate, HuggingFaceTextGenInference):
     max_new_tokens: int = 512
     do_sample: bool = False
     seed: int = 0
-    top_p: Optional[float] = 0.95
+    top_p: Optional[float] = 0.99
     top_k: Optional[int] = None
     penalty_alpha: Optional[float] = 0.0
     typical_p: Optional[float] = 0.95
-    temperature: float = 0.8
+    temperature: float = 0.0
     repetition_penalty: Optional[float] = None
     return_full_text: bool = False
     stop_sequences: List[str] = Field(default_factory=list)
@@ -1445,6 +1480,7 @@ class H2OReplicate(Replicate):
     context: Any = ''
     iinput: Any = ''
     tokenizer: Any = None
+    prompts: Any = []
 
     def _call(
             self,
@@ -1515,25 +1551,42 @@ class ExtraChat:
             else:
                 prompt_text = prompt.text if prompt.text is not None else ''
                 if img_base64:
+                    if isinstance(img_base64, str):
+                        img_base64 = [img_base64]
+                    assert isinstance(img_base64, list)
                     # https://docs.anthropic.com/claude/docs/vision
                     # https://python.langchain.com/docs/integrations/chat/anthropic
                     # could also be type "image" and add "source" with other details
                     # also valid for gpt-4-vision: https://community.openai.com/t/using-gpt-4-vision-preview-in-langchain/549393
                     # https://python.langchain.com/docs/integrations/chat/google_generative_ai
                     # https://github.com/GoogleCloudPlatform/generative-ai/blob/main/gemini/getting-started/intro_gemini_pro_vision_python.ipynb
-                    if img_tag in [geminiimagetag]:
-                        img_url = img_base64
-                    else:
-                        img_url = {
-                            "url": img_base64,
-                        }
-                    content = [
-                        {
+                    content = []
+                    num_images = 0
+                    for img_base64_one in img_base64:
+                        if img_tag in [geminiimagetag]:
+                            img_url = img_base64_one
+                        else:
+                            img_url = {
+                                "url": img_base64_one,
+                            }
+                            # https://platform.openai.com/docs/guides/vision
+                            if img_tag in [gpt4imagetag]:
+                                img_url['detail'] = 'high'
+                        content.append({
                             "type": "image_url",
                             "image_url": img_url,
-                        },
-                        {"type": "text", "text": prompt_text},
-                    ]
+                        })
+                        num_images += 1
+                        if img_tag in [geminiimagetag] and num_images >= geminiimage_num_max:
+                            break
+                        if img_tag in [gpt4imagetag] and num_images >= gpt4image_num_max:
+                            break
+                        if img_tag in [claude3imagetag] and num_images >= claude3image_num_max:
+                            break
+                    # https://cloud.google.com/vertex-ai/generative-ai/docs/multimodal/design-multimodal-prompts
+                    # gemini recommends images come first before text
+                    content.append({"type": "text", "text": prompt_text})
+
                 else:
                     content = prompt_text
                 prompt_message = HumanMessage(content=content)
@@ -1695,6 +1748,7 @@ class H2OChatOpenAI(GenerateStream, ExtraChat, ChatOpenAI):
     tokenizer: Any = None  # for vllm_chat
     system_prompt: Any = None
     chat_conversation: Any = []
+    prompts: Any = []
 
     # max_new_tokens0: Any = None  # FIXME: Doesn't seem to have same max_tokens == -1 for prompts==1
 
@@ -1709,6 +1763,7 @@ class H2OChatOpenAI(GenerateStream, ExtraChat, ChatOpenAI):
 class H2OAzureChatOpenAI(GenerateNormal, ExtraChat, AzureChatOpenAI):
     system_prompt: Any = None
     chat_conversation: Any = []
+    prompts: Any = []
 
     # max_new_tokens0: Any = None  # FIXME: Doesn't seem to have same max_tokens == -1 for prompts==1
 
@@ -1792,6 +1847,7 @@ class H2OChatGroq(GenerateStream2, ExtraChat, ChatGroq):
         else:
             return FakeTokenizer().encode(text)['input_ids']
 
+
 class H2OAzureOpenAI(AzureOpenAI):
     max_new_tokens0: Any = None  # FIXME: Doesn't seem to have same max_tokens == -1 for prompts==1
 
@@ -1870,9 +1926,9 @@ def get_llm(use_openai_model=False,
             num_async=3,
             do_sample=False,
             seed=0,
-            temperature=0.1,
-            top_p=0.7,
-            top_k=40,
+            temperature=0.0,
+            top_p=1.0,
+            top_k=1,
             penalty_alpha=0.0,
             num_beams=1,
             max_new_tokens=512,
@@ -1959,8 +2015,8 @@ def get_llm(use_openai_model=False,
                           seed=seed,
                           max_length=max_new_tokens,  # langchain
                           max_new_tokens=max_new_tokens,  # replicate docs
-                          top_p=top_p if do_sample else 1,
-                          top_k=top_k,  # not always supported
+                          top_p=top_p if do_sample else 1.0,
+                          top_k=top_k if do_sample else 1,  # not always supported
                           repetition_penalty=repetition_penalty)
         if system_prompt in auto_choices:
             if prompter.system_prompt:
@@ -2025,7 +2081,7 @@ def get_llm(use_openai_model=False,
             openai_async_client_completions = openai_async_client.completions
 
         # Langchain oddly passes some things directly and rest via model_kwargs
-        model_kwargs = dict(top_p=top_p if do_sample else 1,
+        model_kwargs = dict(top_p=top_p if do_sample else 1.0,
                             frequency_penalty=0,
                             presence_penalty=(repetition_penalty - 1.0) * 2.0 + 0.0,  # so good default
                             )
@@ -2105,14 +2161,18 @@ def get_llm(use_openai_model=False,
                 assert inf_type == 'openai' or use_openai_model, inf_type
 
         if is_vision_model(model_name):
-            img_file = get_image_file(image_file, image_control, document_choice, convert=True, str_bytes=False)
+            if isinstance(image_file, list):
+                img_file = [get_image_file(x, image_control, document_choice, convert=True, str_bytes=False)
+                            for x in image_file]
+            else:
+                img_file = get_image_file(image_file, image_control, document_choice, convert=True, str_bytes=False)
             if img_file:
                 chat_conversation.append((img_file, gpt4imagetag))
 
         callbacks = [StreamingGradioCallbackHandler(max_time=max_time, verbose=verbose)]
         model_kwargs.update(dict(seed=seed))
         llm = cls(model_name=model_name,
-                  temperature=temperature if do_sample else 0.001,
+                  temperature=temperature if do_sample else 0.0,
                   # FIXME: Need to count tokens and reduce max_new_tokens to fit like in generate.py
                   max_tokens=max_new_tokens,
                   model_kwargs=model_kwargs,
@@ -2139,7 +2199,11 @@ def get_llm(use_openai_model=False,
             cls = H2OChatAnthropic3Sys
 
             if is_vision_model(model_name):
-                img_file = get_image_file(image_file, image_control, document_choice, convert=True, str_bytes=False)
+                if isinstance(image_file, list):
+                    img_file = [get_image_file(x, image_control, document_choice, convert=True, str_bytes=False)
+                                for x in image_file]
+                else:
+                    img_file = get_image_file(image_file, image_control, document_choice, convert=True, str_bytes=False)
                 if img_file:
                     chat_conversation.append((img_file, claude3imagetag))
 
@@ -2155,8 +2219,8 @@ def get_llm(use_openai_model=False,
         llm = cls(model=model_name,
                   anthropic_api_key=os.getenv('ANTHROPIC_API_KEY'),
                   max_tokens=max_new_tokens,
-                  top_p=top_p if do_sample else 1,
-                  top_k=top_k,
+                  top_p=top_p if do_sample else 1.0,
+                  top_k=top_k if do_sample else 1,
                   temperature=temperature if do_sample else 0,
                   # seed=seed,  # FIXME: Not supported yet
                   callbacks=callbacks if stream_output else None,
@@ -2178,7 +2242,11 @@ def get_llm(use_openai_model=False,
             kwargs_extra.update(dict(client=model['client'], async_client=model['async_client']))
 
         if is_vision_model(model_name):
-            img_file = get_image_file(image_file, image_control, document_choice, convert=True, str_bytes=False)
+            if isinstance(image_file, list):
+                img_file = [get_image_file(x, image_control, document_choice, convert=True, str_bytes=False)
+                            for x in image_file]
+            else:
+                img_file = get_image_file(image_file, image_control, document_choice, convert=True, str_bytes=False)
             if img_file:
                 chat_conversation.append((img_file, geminiimagetag))
                 # https://github.com/langchain-ai/langchain/issues/19115
@@ -2218,8 +2286,8 @@ def get_llm(use_openai_model=False,
         callbacks = [StreamingGradioCallbackHandler(max_time=max_time, verbose=verbose)]
         llm = cls(model=model_name,
                   mistral_api_key=os.getenv('MISTRAL_API_KEY'),
-                  top_p=top_p if do_sample else 1,
-                  top_k=top_k,
+                  top_p=top_p if do_sample else 1.0,
+                  top_k=top_k if do_sample else 1,
                   temperature=temperature if do_sample else 0,
                   callbacks=callbacks if stream_output else None,
                   streaming=stream_output,
@@ -2261,7 +2329,7 @@ def get_llm(use_openai_model=False,
                   n=1,
                   max_tokens=max_new_tokens,
                   model_kwargs=dict(
-                      top_p=top_p if do_sample else 1,
+                      top_p=top_p if do_sample else 1.0,
                       # seed=seed,  # FIXME: not supported yet
                       # top_k=top_k,
                   ),
@@ -2281,8 +2349,10 @@ def get_llm(use_openai_model=False,
             content_handler = ChatContentHandler()
         else:
             content_handler = BaseContentHandler()
-        model_kwargs = dict(temperature=temperature if do_sample else 1E-10,
-                            return_full_text=False, top_p=top_p, max_new_tokens=max_new_tokens)
+        model_kwargs = dict(temperature=temperature if do_sample else 1E-2,
+                            return_full_text=False,
+                            top_p=top_p if do_sample else 1.0,
+                            max_new_tokens=max_new_tokens)
         llm = H2OSagemakerEndpoint(
             endpoint_name=endpoint_name,
             region_name=region_name,
@@ -2440,7 +2510,7 @@ def get_llm(use_openai_model=False,
                 seed=seed,
 
                 stop_sequences=prompter.stop_sequences,
-                temperature=temperature,
+                temperature=max(1e-2, temperature),
                 top_k=top_k,
                 top_p=min(max(1e-3, top_p), 1.0 - 1e-3),
                 # typical_p=top_p,
@@ -5115,6 +5185,7 @@ def large_chroma_db(db):
 
 def get_metadatas(db, full_required=True, k_max=10000):
     from langchain.vectorstores import FAISS
+    from langchain.vectorstores import Qdrant
     if isinstance(db, FAISS):
         metadatas = [v.metadata for k, v in db.docstore._dict.items()]
     elif is_chroma_db(db):
@@ -5133,6 +5204,9 @@ def get_metadatas(db, full_required=True, k_max=10000):
             # just use sim search, since too many
             docs1 = sim_search(db, k=k_max, with_score=False)
             metadatas = [x.metadata for x in docs1]
+    elif isinstance(db, Qdrant):
+        points = db.client.scroll(db.collection_name, limit=k_max, with_payload=True)
+        metadatas = [point.payload["metadata"] for point in points]
     elif db is not None:
         # FIXME: Hack due to https://github.com/weaviate/weaviate/issues/1947
         # seems no way to get all metadata, so need to avoid this approach for weaviate
@@ -5169,6 +5243,7 @@ def _get_documents(db):
     # returns not just documents, but full dict of documents, metadatas, ids, embeddings
     # documents['documents] should be list of texts, not Document() type
     from langchain.vectorstores import FAISS
+    from langchain.vectorstores import Qdrant
     if isinstance(db, FAISS):
         documents = [v for k, v in db.docstore._dict.items()]
         documents = dict(documents=documents, metadatas=[{}] * len(documents), ids=[0] * len(documents))
@@ -5176,6 +5251,13 @@ def _get_documents(db):
         documents = db.get()
         if documents is None:
             documents = dict(documents=[], metadatas=[], ids=[])
+    elif isinstance(db, Qdrant):
+        points, next_id = db.client.scroll(db.collection_name, limit=10000, with_payload=True)
+        documents, metadatas = [], []
+        for point in points:
+            documents.append(point.payload["page_content"])
+            metadatas.append(point.payload["metadata"])
+        documents = dict(documents=documents, metadatas=metadatas, ids=[0] * len(documents))
     else:
         # FIXME: Hack due to https://github.com/weaviate/weaviate/issues/1947
         # seems no way to get all metadata, so need to avoid this approach for weaviate
@@ -5438,6 +5520,7 @@ def _run_qa_db(query=None,
                     'chroma' (for chroma >= 0.4)
                     'chroma_old' (for chroma < 0.4)
                     'weaviate' for persisted on disk
+                    'qdrant' for a Qdrant server or an in-memory instance
     :param model_name: model name, used to switch behaviors
     :param model: pre-initialized model, else will make new one
     :param tokenizer: pre-initialized tokenizer, else will make new one.  Required not None if model is not None
@@ -6027,15 +6110,19 @@ class H2OCharacterTextSplitter(RecursiveCharacterTextSplitter):
 
 def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, docs_token_handling=None,
                      joiner=docs_joiner_default,
+                     non_doc_prompt='',
                      do_split=True,
                      verbose=False):
     # NOTE: Could use joiner=\n\n, but if PDF and continues, might want just  full continue with joiner=''
     # NOTE: assume max_input_tokens already processed if was -1 and accounts for model_max_len and is per-llm call
+    if max_input_tokens is not None:
+        max_input_tokens -= get_token_count(non_doc_prompt, tokenizer)
+
     if docs_token_handling in ['chunk']:
         return docs_with_score, 0
     elif docs_token_handling in [None, 'split_or_merge']:
         assert tokenizer
-        tokens_before_split = [get_token_count(x + docs_joiner_default, tokenizer) for x in
+        tokens_before_split = [get_token_count(x + joiner, tokenizer) for x in
                                [x[0].page_content for x in docs_with_score]]
         # skip split if not necessary, since expensive for some reason
         do_split &= any([x > max_input_tokens for x in tokens_before_split])
@@ -6046,7 +6133,7 @@ def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, doc
 
             # see if need to split
             # account for joiner tokens
-            joiner_tokens = get_token_count(docs_joiner_default, tokenizer)
+            joiner_tokens = get_token_count(joiner, tokenizer)
             doc_chunk_size = max(64, min(max_input_tokens,
                                          max(64, max_input_tokens - joiner_tokens * len(docs_with_score))))
             text_splitter = H2OCharacterTextSplitter.from_huggingface_tokenizer(
@@ -6065,7 +6152,7 @@ def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, doc
             docs_new = [x for _, x in sorted(zip(doci_new, docs_new), key=lambda pair: pair[0])]
             docs_with_score = [(x, x.metadata['docscore']) for x in docs_new]
 
-            tokens_after_split = [get_token_count(x + docs_joiner_default, tokenizer) for x in
+            tokens_after_split = [get_token_count(x + joiner, tokenizer) for x in
                                   [x[0].page_content for x in docs_with_score]]
             if verbose:
                 print('tokens_after_split=%s' % tokens_after_split, flush=True)
@@ -6094,7 +6181,7 @@ def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, doc
             assert top_k_docs >= 1
             k += top_k_docs
 
-        tokens_after_merge = [get_token_count(x + docs_joiner_default, tokenizer) for x in
+        tokens_after_merge = [get_token_count(x + joiner, tokenizer) for x in
                               [x[0].page_content for x in docs_with_score_new]]
         if verbose:
             print('tokens_after_merge=%s' % tokens_after_merge, flush=True)
@@ -6407,7 +6494,7 @@ def get_chain(query=None,
         chunk_id = 0 if query_action else -1
         text_context_list = [
             Document(page_content=x, metadata=dict(source='text_context_list', score=1.0, chunk_id=chunk_id)) for x
-            in text_context_list]
+            in text_context_list if x]
 
     if add_search_to_context:
         params = {
@@ -7097,6 +7184,32 @@ def get_chain(query=None,
     tokenizer = get_tokenizer(db=db, llm=llm, tokenizer=tokenizer, inference_server=inference_server,
                               use_openai_model=use_openai_model,
                               db_type=db_type)
+
+    get_limited_prompt_func = functools.partial(get_limited_prompt,
+                                                prompter=prompter,
+                                                base_model=model_name,
+                                                inference_server=inference_server,
+                                                prompt_type=prompt_type,
+                                                prompt_dict=prompt_dict,
+                                                max_new_tokens=max_new_tokens,
+                                                system_prompt=system_prompt,
+                                                allow_chat_system_prompt=allow_chat_system_prompt,
+                                                context=context,
+                                                chat_conversation=chat_conversation,
+                                                keep_sources_in_context=keep_sources_in_context,
+                                                gradio_errors_to_chatbot=gradio_errors_to_chatbot,
+                                                model_max_length=model_max_length,
+                                                memory_restriction_level=memory_restriction_level,
+                                                langchain_mode=langchain_mode,
+                                                add_chat_history_to_context=add_chat_history_to_context,
+                                                min_max_new_tokens=min_max_new_tokens,
+                                                max_input_tokens=max_input_tokens,
+                                                truncation_generation=truncation_generation,
+                                                gradio_server=gradio_server,
+                                                attention_sinks=attention_sinks,
+                                                hyde_level=hyde_level,
+                                                )
+
     # NOTE: if map_reduce, then no need to auto reduce chunks
     if query_action and (top_k_docs == -1 or auto_reduce_chunks):
         top_k_docs_tokenize = 100
@@ -7125,35 +7238,13 @@ def get_chain(query=None,
             num_prompt_tokens0, num_prompt_tokens_actual, \
             history_to_use_final, external_handle_chat_conversation, \
             top_k_docs_trial, one_doc_size, \
-            truncation_generation, system_prompt = \
-            get_limited_prompt(query,
-                               iinput,
-                               tokenizer,
-                               estimated_instruction=estimated_prompt_no_docs,
-                               prompter=prompter,
-                               base_model=model_name,
-                               inference_server=inference_server,
-                               prompt_type=prompt_type,
-                               prompt_dict=prompt_dict,
-                               max_new_tokens=max_new_tokens,
-                               system_prompt=system_prompt,
-                               allow_chat_system_prompt=allow_chat_system_prompt,
-                               context=context,
-                               chat_conversation=chat_conversation,
-                               text_context_list=[x[0].page_content for x in docs_with_score],
-                               keep_sources_in_context=keep_sources_in_context,
-                               gradio_errors_to_chatbot=gradio_errors_to_chatbot,
-                               model_max_length=model_max_length,
-                               memory_restriction_level=memory_restriction_level,
-                               langchain_mode=langchain_mode,
-                               add_chat_history_to_context=add_chat_history_to_context,
-                               min_max_new_tokens=min_max_new_tokens,
-                               max_input_tokens=max_input_tokens,
-                               truncation_generation=truncation_generation,
-                               gradio_server=gradio_server,
-                               attention_sinks=attention_sinks,
-                               hyde_level=hyde_level,
-                               )
+            truncation_generation, system_prompt = get_limited_prompt_func(query,
+                                                                           iinput,
+                                                                           tokenizer,
+                                                                           estimated_instruction=estimated_prompt_no_docs,
+                                                                           text_context_list=[x[0].page_content for x in
+                                                                                              docs_with_score],
+                                                                           )
         # get updated llm
         llm_kwargs.update(max_new_tokens=max_new_tokens, context=context, iinput=iinput, system_prompt=system_prompt)
         if external_handle_chat_conversation:
@@ -7186,12 +7277,33 @@ def get_chain(query=None,
         docs_with_score = select_docs_with_score(docs_with_score, top_k_docs, one_doc_size)
 
     if summarize_action:
+        if langchain_action in [LangChainAction.SUMMARIZE_MAP.value, LangChainAction.EXTRACT.value]:
+            estimated_prompt_no_docs = template.format(text='', question=query)
+        else:
+            estimated_prompt_no_docs = template.format(input_documents='', question=query)
+
+        # first docs_with_score are most important with highest score
+        estimated_full_prompt, \
+            _, _, _, \
+            _, _, \
+            _, _, \
+            _, _, \
+            _, _, \
+            _, _ = get_limited_prompt_func(estimated_prompt_no_docs,
+                                           iinput,
+                                           tokenizer,
+                                           estimated_instruction=estimated_prompt_no_docs,
+                                           text_context_list=[],
+                                           # nothing, just getting base amount for each call
+                                           )
+
         # group docs if desired/can to fill context to avoid multiple LLM calls or too large chunks
         docs_with_score, max_doc_tokens = split_merge_docs(docs_with_score,
                                                            tokenizer,
                                                            max_input_tokens=max_input_tokens,
                                                            docs_token_handling=docs_token_handling,
                                                            joiner=docs_joiner,
+                                                           non_doc_prompt=estimated_full_prompt,
                                                            verbose=verbose)
         # in case docs_with_score grew due to splitting, limit again by top_k_docs
         if top_k_docs > 0:
@@ -7464,7 +7576,7 @@ def get_tokenizer(db=None, llm=None, tokenizer=None, inference_server=None, use_
     else:
         # backup method
         if os.getenv('HARD_ASSERTS'):
-            assert db_type in ['faiss', 'weaviate']
+            assert db_type in ['faiss', 'weaviate', 'qdrant']
         # use tiktoken for faiss since embedding called differently
         return FakeTokenizer()
 
@@ -7982,6 +8094,12 @@ def _update_user_db(file,
             raise ValueError("Not allowed to upload to scratch/personal space")
         elif in_user_db and not allow_upload_to_user_data:
             raise ValueError("Not allowed to upload to shared space")
+        elif langchain_mode_types and langchain_mode in langchain_mode_types and langchain_mode_types[
+            langchain_mode] in [LangChainTypes.SHARED.value] and not allow_upload_to_user_data:
+            raise ValueError("Not allowed to upload to shared space")
+        elif langchain_mode_types and langchain_mode in langchain_mode_types and langchain_mode_types[
+            langchain_mode] in [LangChainTypes.PERSONAL.value] and not allow_upload_to_my_data:
+            raise ValueError("Not allowed to upload to scratch/personal space")
 
     # handle case of list of temp buffer
     if isinstance(file, str) and file.strip().startswith('['):
@@ -8566,6 +8684,60 @@ def _create_local_weaviate_client():
     except Exception as e:
         print(f"Failed to create Weaviate client: {e}")
         return None
+    
+def _get_qdrant_options():
+    env_vars = os.environ.keys()
+
+    qdrant_env_vars = [var for var in env_vars if var.startswith("QDRANT_")]
+
+    if len(qdrant_env_vars) == 0:
+        return None
+
+    options = {
+        "url": os.getenv("QDRANT_URL", None),
+        "host": os.getenv("QDRANT_HOST", None),
+        "port": int(os.getenv("QDRANT_PORT", 6333)),
+        "grpc_port": int(os.getenv("QDRANT_GRPC_PORT", 6334)),
+        "prefer_grpc": bool(os.getenv("QDRANT_PREFER_GRPC", False)),
+        "https": bool(os.getenv("QDRANT_HTTPS", None)),
+        "api_key": os.getenv("QDRANT_API_KEY", None),
+        "prefix": os.getenv("QDRANT_PREFIX", None),
+        "timeout": float(os.getenv("QDRANT_TIMEOUT", None)),
+        "path": os.getenv("QDRANT_PATH", None),
+    }
+
+    return options
+
+def _get_unique_sources_in_qdrant(db):
+    from langchain.vectorstores import Qdrant
+    import grpc
+
+    if not isinstance(db, Qdrant):
+        raise ValueError("db must be an instance of langchain.vectorstores.Qdrant")
+
+    sources = []
+    next_offset = None
+    stop_scrolling = False
+    scroll_size = 1000
+
+    while not stop_scrolling:
+        records, next_offset = db.client.scroll(
+            collection_name=db.collection_name,
+            limit=scroll_size,
+            offset=next_offset,
+            with_payload=True,
+        )
+
+        # Qdrant client supports a REST and GPRC interface. So we need to handle the response differently
+        stop_scrolling = next_offset is None or (
+            isinstance(next_offset, grpc.PointId)
+            and next_offset.num == 0
+            and next_offset.uuid == ""
+        )
+
+        sources.extend(records)
+    unique_sources = {source.payload["metadata"]["source"] for source in sources}
+    return unique_sources
 
 
 if __name__ == '__main__':

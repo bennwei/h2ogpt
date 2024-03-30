@@ -26,12 +26,12 @@ pandas>=2.0.2
 matplotlib>=3.7.1
 loralib>=0.1.1
 bitsandbytes>=0.41.0
-accelerate>=0.27.2
+accelerate>=0.28.0
 peft>=0.7.0
-transformers>=4.38.1
+transformers>=4.39.2
 tokenizers>=0.15.2
 APScheduler>=3.10.1
-hf_transfer>=0.1.5
+hf_transfer>=0.1.6
 
 # optional for generate
 pynvml>=11.5.0

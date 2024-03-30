@@ -635,7 +635,7 @@ class GradioClient(Client):
         hyde_show_only_final: bool = True,
         doc_json_mode: bool = False,
         metadata_in_context: list = [],
-        image_file: str = None,
+        image_file: Union[str, list] = None,
         image_control: str = None,
         prompt_type: Union[int, str] = None,
         prompt_dict: Dict = None,
@@ -652,7 +652,7 @@ class GradioClient(Client):
         tts_language: str = "autodetect",
         tts_speed: float = 1.0,
         visible_image_models: List[str] = [],
-        visible_models: Union[str, list] = None,
+        visible_models: Union[str, int, list] = None,
         num_return_sequences: int = None,  # don't use
         chat: bool = True,  # don't use
         min_new_tokens: int = None,  # don't use
@@ -821,6 +821,8 @@ class GradioClient(Client):
         h2ogpt_key = h2ogpt_key or self.h2ogpt_key
         client.h2ogpt_key = h2ogpt_key
 
+        if model is not None and visible_models is None:
+            visible_models = model
         self.check_model(model)
 
         # chunking not used here
@@ -924,23 +926,42 @@ class GradioClient(Client):
                     t_taken_s = time.time() - t0
                     # in case server changed, update in case clone()
                     self.server_hash = client.server_hash
-                    res = ast.literal_eval(res)
-                    response = res["response"]
+                    res_dict = ast.literal_eval(res)
+                    response = res_dict["response"]
                     if langchain_action != LangChainAction.EXTRACT.value:
                         response = response.strip()
                     else:
                         response = [r.strip() for r in ast.literal_eval(response)]
-                    sources = res["sources"]
+                    sources = res_dict["sources"]
                     scores_out = [x["score"] for x in sources]
                     texts_out = [x["content"] for x in sources]
-                    prompt_raw = res.get("prompt_raw", "")
-                    actual_llm = res["save_dict"]["base_model"]
-                    extra_dict = res["save_dict"]["extra_dict"]
-                    input_tokens = extra_dict["num_prompt_tokens"]
-                    output_tokens = extra_dict["ntokens"]
-                    tokens_per_second = np.round(
-                        extra_dict["tokens_persecond"], decimals=3
-                    )
+                    prompt_raw = res_dict.get("prompt_raw", "")
+
+                    try:
+                        actual_llm = res_dict["save_dict"][
+                            "base_model"
+                        ]  # fast path
+                    except Exception as e:
+                        print_warning(
+                            f"Unable to access save_dict to get actual_llm: {str(e)}"
+                        )
+                        actual_llm = (
+                            sanitize_llm(visible_models)
+                            if sanitize_llm is not None
+                            else visible_models
+                        )
+
+                    try:
+                        extra_dict = res_dict["save_dict"]["extra_dict"]
+                        input_tokens = extra_dict["num_prompt_tokens"]
+                        output_tokens = extra_dict["ntokens"]
+                        tokens_per_second = np.round(
+                            extra_dict["tokens_persecond"], decimals=3
+                        )
+                    except:
+                        if os.getenv("HARD_ASSERTS"):
+                            raise
+                        input_tokens = output_tokens = tokens_per_second = None
                     if asserts:
                         if text and not file and not url:
                             assert any(
@@ -1100,8 +1121,13 @@ class GradioClient(Client):
                 if trial == trials - 1:
                     raise
                 else:
-                    print_warning("trying again: %s" % trial)
-                    time.sleep(1 * trial)
+                    # both Anthopic and openai gives this kind of error, but h2oGPT only has retries for OpenAI
+                    if 'Overloaded' in str(traceback.format_tb(e.__traceback__)):
+                        sleep_time = 30 + 2 ** (trial + 1)
+                    else:
+                        sleep_time = 1 * trial
+                    print_warning("trying again: %s in %s seconds" % (trial, sleep_time))
+                    time.sleep(sleep_time)
             finally:
                 # in case server changed, update in case clone()
                 self.server_hash = client.server_hash

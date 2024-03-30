@@ -74,6 +74,7 @@ class PromptType(Enum):
     qwen = 68
     sealion = 69
     groq = 70
+    aya = 71
 
 
 class DocumentSubset(Enum):
@@ -241,13 +242,23 @@ gpt4image_num_max = 10
 # gemini-1.0-pro
 google_mapping = {
     "gemini-pro": 30720,
+    "gemini-1.0-pro-latest": 30720,
     "gemini-pro-vision": 12288,
+    "gemini-1.0-pro-vision-latest": 12288,
+    "gemini-1.0-ultra-latest": 30720,
+    "gemini-ultra": 30720,
+    "gemini-1.5-pro-latest": 1048576,
 }
 
 # FIXME: at least via current API:
 google_mapping_outputs = {
     "gemini-pro": 2048,
+    "gemini-1.0-pro-latest": 2048,
     "gemini-pro-vision": 4096,
+    "gemini-1.0-pro-vision-latest": 4096,
+    "gemini-1.0-ultra-latest": 2048,
+    "gemini-ultra": 2048,
+    "gemini-1.5-pro-latest": 8192,
 }
 
 mistralai_mapping = {
@@ -335,7 +346,8 @@ def t5_type(model_name):
     return 't5' == model_name.lower() or \
         't5-' in model_name.lower() or \
         'flan-' in model_name.lower() or \
-        'fastchat-t5' in model_name.lower()
+        'fastchat-t5' in model_name.lower() or \
+        'CohereForAI/aya-101' in model_name.lower()
 
 
 def get_langchain_prompts(pre_prompt_query, prompt_query, pre_prompt_summary, prompt_summary, hyde_llm_prompt,

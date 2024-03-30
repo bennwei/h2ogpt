@@ -206,6 +206,8 @@ def main(
         sink_dict: typing.Dict = dict(),
         truncation_generation: bool = False,
         hf_model_dict: typing.Dict = dict(),
+        force_seq2seq_type: bool = False,
+        force_t5_type: bool = False,
 
         model_lock: typing.List[typing.Dict[str, str]] = None,
         model_lock_columns: int = None,
@@ -320,6 +322,7 @@ def main(
         visible_submit_buttons: bool = True,
         visible_side_bar: bool = True,
         visible_doc_track: bool = True,
+
         visible_chat_tab: bool = True,
         visible_doc_selection_tab: bool = True,
         visible_doc_view_tab: bool = True,
@@ -330,6 +333,7 @@ def main(
         visible_tos_tab: bool = False,
         visible_login_tab: bool = True,
         visible_hosts_tab: bool = False,
+
         chat_tables: bool = False,
         visible_h2ogpt_links: bool = True,
         visible_h2ogpt_qrcode: bool = True,
@@ -1180,7 +1184,7 @@ def main(
     :param image_file: Initial image for UI (or actual image for CLI) Vision Q/A.  Or list of images for some models
     :param image_control: Initial image for UI Image Control
 
-    :param asr_model: Name of model for ASR, e.g. openai/whisper-medium or openai/whisper-large-v3 or distil-whisper/distil-large-v2 or microsoft/speecht5_asr
+    :param asr_model: Name of model for ASR, e.g. openai/whisper-medium or openai/whisper-large-v3 or distil-whisper/distil-large-v3 or microsoft/speecht5_asr
            whisper-medium uses about 5GB during processing, while whisper-large-v3 needs about 10GB during processing
     :param asr_gpu: Whether to use GPU for ASR model
     :param asr_gpu_id: Which GPU to put ASR model on (only used if preloading model)
@@ -1737,7 +1741,7 @@ def main(
         caption_gpu = False
         asr_gpu = False
     if is_public:
-        stt_model = 'distil-whisper/distil-large-v2'
+        stt_model = 'distil-whisper/distil-large-v3'
 
     # defaults
     caption_loader = None
@@ -2014,11 +2018,15 @@ def main(
                                       sink_dict=sink_dict,
                                       truncation_generation=truncation_generation,
                                       hf_model_dict=hf_model_dict,
+                                      force_seq2seq_type=force_seq2seq_type,
+                                      force_t5_type=force_t5_type,
+                                      trust_remote_code=trust_remote_code,
                                       )
     model_state_none = dict(model=None, tokenizer=None, device=None,
                             base_model=None, base_mode0=None, tokenizer_base_model=None, lora_weights=None,
                             inference_server=None, prompt_type=None, prompt_dict=None,
                             visible_models=None, h2ogpt_key=None,
+                            trust_remote_code=None,
                             )
     model_state_none.update(other_model_state_defaults)
     my_db_state0 = {LangChainMode.MY_DATA.value: [None, None, None]}
@@ -2654,6 +2662,8 @@ def get_model(
         exllama_dict=None,
         gptq_dict=None,
         hf_model_dict={},
+        force_seq2seq_type=False,
+        force_t5_type=False,
 
         verbose: bool = False,
 ):
@@ -2746,7 +2756,10 @@ def get_model(
                          rope_scaling=rope_scaling, max_seq_len=max_seq_len,
                          model_name_exllama_if_no_config=model_name_exllama_if_no_config,
                          exllama_dict=exllama_dict, gptq_dict=gptq_dict,
-                         hf_model_dict=hf_model_dict)
+                         hf_model_dict=hf_model_dict,
+                         force_seq2seq_type=force_seq2seq_type,
+                         force_t5_type=force_t5_type,
+                         )
     model_loader, tokenizer_loader, conditional_type = get_loaders(**loader_kwargs)
 
     if not tokenizer_base_model:
@@ -3166,6 +3179,8 @@ def get_model(
                         loader_kwargs=loader_kwargs,
                         gptq_dict=gptq_dict,
                         hf_model_dict=hf_model_dict,
+                        force_seq2seq_type=force_seq2seq_type,
+                        force_t5_type=force_t5_type,
 
                         verbose=verbose)
 
@@ -3202,6 +3217,8 @@ def get_hf_model(load_8bit: bool = False,
                  loader_kwargs=None,
                  gptq_dict=None,
                  hf_model_dict=None,
+                 force_seq2seq_type=None,
+                 force_t5_type=None,
 
                  verbose: bool = False,
                  ):
@@ -3530,6 +3547,8 @@ def get_score_model(score_model: str = None,
                     sink_dict: typing.Dict = None,
                     truncation_generation: bool = False,
                     hf_model_dict: typing.Dict = None,
+                    force_seq2seq_type: bool = False,
+                    force_t5_type: bool = False,
 
                     verbose: bool = False,
                     ):
@@ -3564,6 +3583,9 @@ def get_score_model(score_model: str = None,
         sink_dict = {}
         truncation_generation = False
         hf_model_dict = {}
+        force_seq2seq_type = False
+        force_t5_type = False
+
         smodel, stokenizer, sdevice = get_model(reward_type=True,
                                                 **get_kwargs(get_model, exclude_names=['reward_type'], **locals()))
     else:
@@ -3731,6 +3753,8 @@ def evaluate(
         sink_dict=None,
         truncation_generation=None,
         hf_model_dict=None,
+        force_seq2seq_type=None,
+        force_t5_type=None,
 
         load_exllama=None,
         answer_with_sources=None,
@@ -4240,6 +4264,8 @@ def evaluate(
                 sink_dict=sink_dict,
                 truncation_generation=truncation_generation,
                 hf_model_dict=hf_model_dict,
+                force_seq2seq_type=force_seq2seq_type,
+                force_t5_type=force_t5_type,
 
                 auto_reduce_chunks=auto_reduce_chunks,
                 max_chunks=max_chunks,
@@ -4484,16 +4510,20 @@ def evaluate(
             if is_gradio_vision_model(base_model) and llava_direct_gradio:
                 where_from = "gr_client for llava"
 
+                num_prompt_tokens += 1500  # estimate for single image
+
                 # NOTE: llava doesn't handle context or system prompt directly
-                img_file = get_image_file(image_file, image_control, document_choice)
+                img_file = get_image_file(image_file, image_control, document_choice)  # comes out as list
                 llava_kwargs = dict(file=img_file,
                                     llava_model=inference_server,
                                     # prompt=instruction,
                                     prompt=prompt,  # prepared prompt with chat history etc.
                                     chat_conversation=chat_conversation,
                                     allow_prompt_auto=False,
-                                    image_model=base_model, temperature=temperature,
-                                    top_p=top_p, max_new_tokens=max_new_tokens,
+                                    image_model=base_model,
+                                    temperature=temperature,
+                                    top_p=top_p,
+                                    max_new_tokens=max_new_tokens,
                                     client=gr_client if not regenerate_gradio_clients else None,
                                     )
                 if not stream_output:
@@ -4567,7 +4597,7 @@ def evaluate(
                         gr_prompt_dict = prompt_dict
 
                     # ensure image in correct format
-                    img_file = get_image_file(image_file, image_control, document_choice, convert=True)
+                    img_file = get_image_file(image_file, image_control, document_choice, convert=True)  # comes out as list
 
                     client_kwargs = dict(instruction=gr_prompt if chat_client else '',  # only for chat=True
                                          iinput=gr_iinput,  # only for chat=True
@@ -5675,6 +5705,30 @@ def get_relaxed_max_new_tokens(prompt, tokenizer=None, max_new_tokens=None, max_
     return max_new_tokens
 
 
+def apply_chat_template(instruction, system_prompt, history, tokenizer, verbose=False):
+    prompt = None
+
+    from openai_server.backend_utils import structure_to_messages
+
+    system_prompts_to_use = [system_prompt if system_prompt not in [None, '', 'auto'] else None, None]
+    for si, system_prompt_to_use in enumerate(system_prompts_to_use):
+        try:
+            messages = structure_to_messages(instruction,
+                                             system_prompt_to_use,
+                                             history)
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+            break
+        except Exception as e:
+            if si == 0 and 'Conversation roles must alternate' in str(e):
+                if verbose:
+                    print("No system prompt supported: %s" % str(e))
+                continue
+            else:
+                raise
+    assert prompt is not None, "Prompt was not set"
+    return prompt
+
+
 def get_limited_prompt(instruction,
                        iinput,
                        tokenizer,
@@ -5778,7 +5832,6 @@ def get_limited_prompt(instruction,
                                                 gradio_errors_to_chatbot=gradio_errors_to_chatbot,
                                                 min_max_new_tokens=min_max_new_tokens)
 
-    from openai_server.backend_utils import structure_to_messages
     use_chat_template = prompt_type in [None, '', 'plain'] and \
                         (hasattr(tokenizer, 'chat_template') and
                          tokenizer.chat_template not in [None, ''] or
@@ -5787,16 +5840,6 @@ def get_limited_prompt(instruction,
                          )
     if is_gradio_vision_model(base_model):
         use_chat_template = False
-
-    if use_chat_template:
-        messages = structure_to_messages(instruction,
-                                         system_prompt if system_prompt not in [None, '', 'auto'] else None,
-                                         history)
-        context2 = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        iinput = ''
-        context = ''
-    else:
-        context2 = history_to_context_func(history)
 
     context1 = context
     if context1 is None:
@@ -5822,10 +5865,6 @@ def get_limited_prompt(instruction,
 
     context1, num_context1_tokens = H2OTextGenerationPipeline.limit_prompt(context1, tokenizer,
                                                                            max_prompt_length=max_input_tokens)
-    context2_trial, num_context2_tokens = H2OTextGenerationPipeline.limit_prompt(context2, tokenizer,
-                                                                                 max_prompt_length=max_input_tokens)
-    if not use_chat_template:
-        context2 = context2_trial
 
     iinput, num_iinput_tokens = H2OTextGenerationPipeline.limit_prompt(iinput, tokenizer,
                                                                        max_prompt_length=max_input_tokens)
@@ -5833,6 +5872,21 @@ def get_limited_prompt(instruction,
     system_prompt, num_system_tokens = H2OTextGenerationPipeline.limit_prompt(system_prompt, tokenizer,
                                                                               max_prompt_length=int(
                                                                                   max_input_tokens * 0.9))
+    if use_chat_template:
+        context2 = apply_chat_template(instruction, system_prompt, history, tokenizer)
+        iinput = ''
+        context1 = ''
+        num_context1_tokens = 0
+    else:
+        context2 = history_to_context_func(history)
+
+    context2_trial, num_context2_tokens = H2OTextGenerationPipeline.limit_prompt(context2, tokenizer,
+                                                                                 max_prompt_length=max_input_tokens)
+    if not use_chat_template:
+        context2 = context2_trial
+    else:
+        num_context2_tokens = 0
+
     # limit system prompt
     if prompter:
         prompter.system_prompt = system_prompt
@@ -5901,8 +5955,9 @@ def get_limited_prompt(instruction,
                     history_to_use = history[0 + chat_index:]
 
                 if use_chat_template:
-                    messages = structure_to_messages(instruction, system_prompt, history_to_use)
-                    context2 = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+                    instruction, _ = H2OTextGenerationPipeline.limit_prompt(instruction, tokenizer,
+                                                                            max_prompt_length=non_doc_max_length)
+                    context2 = apply_chat_template(instruction, system_prompt, history_to_use, tokenizer)
                 else:
                     context2 = history_to_context_func(history_to_use)
 

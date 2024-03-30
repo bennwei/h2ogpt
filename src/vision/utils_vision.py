@@ -1,6 +1,7 @@
 import base64
 import os
 import time
+import types
 import uuid
 from io import BytesIO
 import numpy as np
@@ -134,6 +135,10 @@ def get_llava_response(file=None,
                        max_time=None,
                        force_stream=True,
                        ):
+    if isinstance(file, list) and len(file) >= 1:
+        # llava only handles first image if list of images
+        file = file[0]
+
     kwargs = locals()
 
     if force_stream:
@@ -176,6 +181,10 @@ def get_llava_stream(file, llava_model,
                      max_time=None,
                      force_stream=True,  # dummy arg
                      ):
+    if isinstance(file, list) and len(file) >= 1:
+        # llava only handles first image if list of images
+        file = file[0]
+
     image_model = os.path.basename(image_model)  # in case passed HF link
     prompt = fix_llava_prompt(file, prompt, allow_prompt_auto=allow_prompt_auto)
 
@@ -267,7 +276,7 @@ def get_image_model_dict(enable_image,
     return image_dict
 
 
-def pdf_to_base64_pngs(pdf_path, quality=75, max_size=(1024, 1024), ext='png'):
+def pdf_to_base64_pngs(pdf_path, quality=75, max_size=(1024, 1024), ext='png', pages=None):
     """
     Define the function to convert a pdf slide deck to a list of images. Note that we need to ensure we resize images to keep them within Claude's size limits.
     """
@@ -282,7 +291,12 @@ def pdf_to_base64_pngs(pdf_path, quality=75, max_size=(1024, 1024), ext='png'):
 
     # Iterate through each page of the PDF
     images = []
-    for page_num in range(doc.page_count):
+    if pages is None:
+        pages = list(range(doc.page_count))
+    else:
+        assert isinstance(pages, (list, tuple, types.GeneratorType))
+
+    for page_num in pages:
         # Load the page
         page = doc.load_page(page_num)
 

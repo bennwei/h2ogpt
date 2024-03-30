@@ -147,7 +147,7 @@ sudo chmod +x /usr/bin/chromedriver
 #* GPU Optional: For AutoGPTQ support on x86_64 linux
 #
 # in-transformers support of AutoGPTQ, requires also auto-gptq above to be installed since used internally by transformers/optimum
-pip install optimum==1.16.1 -c reqs_optional/reqs_constraints.txt
+pip install optimum==1.18.0 -c reqs_optional/reqs_constraints.txt
 #    See [AutoGPTQ](README_GPU.md#autogptq) about running AutoGPT models.
 
 
@@ -217,7 +217,8 @@ pip install -r reqs_optional/requirements_optional_agents.txt -c reqs_optional/r
 
 
 # https://github.com/h2oai/h2ogpt/issues/1483
-pip uninstall flash_attn autoawq autoawq-kernels -y && pip install flash_attn autoawq autoawq-kernels --no-cache-dir
+pip uninstall flash_attn autoawq autoawq-kernels -y
+pip install flash_attn autoawq autoawq-kernels --no-cache-dir -c reqs_optional/reqs_constraints.txt
 
 
 bash ./docs/run_patches.sh

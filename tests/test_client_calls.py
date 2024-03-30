@@ -2608,6 +2608,8 @@ def test_client_load_unload_models(model_choice):
     sink_dict = "{}"
     truncation_generation = False
     hf_model_dict = "{}"
+    model_force_seq2seq_type = False
+    model_force_force_t5_type = False
     args_list = [model_choice, lora_choice, server_choice,
                  # model_state,
                  prompt_type,
@@ -2621,6 +2623,7 @@ def test_client_load_unload_models(model_choice):
                  n_gpu_layers, n_batch, n_gqa, llamacpp_dict_more,
                  system_prompt,
                  exllama_dict, gptq_dict, attention_sinks, sink_dict, truncation_generation, hf_model_dict,
+                 model_force_seq2seq_type, model_force_force_t5_type,
                  ]
     res = client.predict(*tuple(args_list), api_name='/load_model')
 
@@ -4833,8 +4836,16 @@ def test_max_new_tokens(max_new_tokens, temperature):
                 assert len(set(repeat_responses)) >= len(repeat_responses) - fudge_seed
 
 
+vision_models = ['gpt-4-vision-preview', 'gemini-pro-vision',
+                 'gemini-1.5-pro-latest', 'claude-3-haiku-20240307', 'liuhaotian/llava-v1.6-34b',
+                 'liuhaotian/llava-v1.6-vicuna-13b']
+
+
 @wrap_test_forked
-def test_client1_image_qa_proprietary():
+@pytest.mark.parametrize("base_model", vision_models)
+@pytest.mark.parametrize("langchain_mode", ['LLM', 'MyData'])
+@pytest.mark.parametrize("langchain_action", [LangChainAction.QUERY.value, LangChainAction.SUMMARIZE_MAP.value])
+def test_client1_image_qa(langchain_action, langchain_mode, base_model):
     inference_server = os.getenv('TEST_SERVER', 'https://gpt.h2o.ai')
     if inference_server == 'https://gpt.h2o.ai':
         auth_kwargs = dict(auth=('guest', 'guest'))
@@ -4843,7 +4854,7 @@ def test_client1_image_qa_proprietary():
 
     from src.gen import get_inf_models
     base_models = get_inf_models(inference_server)
-    base_models_touse = ['gpt-4-vision-preview', 'gemini-pro-vision', 'claude-3-haiku-20240307']
+    base_models_touse = [base_model]
     assert len(set(base_models_touse).difference(set(base_models))) == 0
     h2ogpt_key = os.environ['H2OGPT_H2OGPT_KEY']
 
@@ -4856,23 +4867,43 @@ def test_client1_image_qa_proprietary():
     from src.vision.utils_vision import img_to_base64
     image_file = img_to_base64(image_file)
 
-    for base_model in base_models_touse:
-        print("Doing base_model=%s" % base_model)
-        kwargs = dict(instruction_nochat=prompt,
-                      image_file=image_file,
-                      visible_models=base_model,
-                      stream_output=False,
-                      h2ogpt_key=h2ogpt_key)
+    print("Doing base_model=%s" % base_model)
+    kwargs = dict(instruction_nochat=prompt,
+                  image_file=image_file,
+                  visible_models=base_model,
+                  stream_output=False,
+                  langchain_mode=langchain_mode,
+                  langchain_action=langchain_action,
+                  h2ogpt_key=h2ogpt_key)
+    try:
         res = client.predict(str(dict(kwargs)), api_name='/submit_nochat_api')
+    except Exception as e:
+        if base_model in ['gemini-pro-vision'] and """safety_ratings {
+  category: HARM_CATEGORY_DANGEROUS_CONTENT
+  probability: MEDIUM
+}""" in str(e):
+            return
+        else:
+            raise
 
-        # string of dict for output
-        response = ast.literal_eval(res)['response']
-        print(response)
-        assert 'license' in response.lower()
+    # string of dict for output
+    res_dict = ast.literal_eval(res)
+    response = res_dict['response']
+    print('base_model: %s langchain_mode: %s response: %s' % (base_model, langchain_mode, response), file=sys.stderr)
+    print(response)
+
+    if 'no relevant documents to summarize'.lower() in response.lower() and langchain_action == LangChainAction.SUMMARIZE_MAP.value:
+        return
+
+    assert 'license' in response.lower()
+    assert res_dict['save_dict']['extra_dict']['num_prompt_tokens'] > 1000
 
 
 @wrap_test_forked
-def test_client1_images_qa_proprietary():
+@pytest.mark.parametrize("base_model", vision_models)
+@pytest.mark.parametrize("langchain_mode", ['LLM', 'MyData'])
+@pytest.mark.parametrize("langchain_action", [LangChainAction.QUERY.value, LangChainAction.SUMMARIZE_MAP.value])
+def test_client1_images_qa(langchain_action, langchain_mode, base_model):
     image_dir = 'pdf_images'
     makedirs(image_dir)
     os.system('pdftoppm tests/2403.09629.pdf %s/outputname -jpeg' % image_dir)
@@ -4887,7 +4918,7 @@ def test_client1_images_qa_proprietary():
 
     from src.gen import get_inf_models
     base_models = get_inf_models(inference_server)
-    base_models_touse = ['gemini-pro-vision', 'gpt-4-vision-preview', 'claude-3-haiku-20240307']
+    base_models_touse = [base_model]
     assert len(set(base_models_touse).difference(set(base_models))) == 0
     h2ogpt_key = os.environ['H2OGPT_H2OGPT_KEY']
 
@@ -4899,21 +4930,33 @@ def test_client1_images_qa_proprietary():
     from src.vision.utils_vision import img_to_base64
     image_files = [img_to_base64(image_file) for image_file in pdf_images]
 
-    for base_model in base_models_touse:
-        print("Doing base_model=%s" % base_model)
-        kwargs = dict(instruction_nochat=prompt,
-                      image_file=image_files,
-                      visible_models=base_model,
-                      stream_output=False,
-                      h2ogpt_key=h2ogpt_key)
-        res = client.predict(str(dict(kwargs)), api_name='/submit_nochat_api')
+    print("Doing base_model=%s" % base_model)
+    kwargs = dict(instruction_nochat=prompt,
+                  image_file=image_files,
+                  visible_models=base_model,
+                  stream_output=False,
+                  langchain_mode=langchain_mode,
+                  langchain_action=langchain_action,
+                  h2ogpt_key=h2ogpt_key)
+    res_dict = client.predict(str(dict(kwargs)), api_name='/submit_nochat_api')
+    response = ast.literal_eval(res_dict)['response']
 
-        # string of dict for output
-        response = ast.literal_eval(res)['response']
-        print(response)
-        assert 'REINFORCE'.lower() in response.lower()
+    if base_model in ['liuhaotian/llava-v1.6-vicuna-13b'] and """research paper or academic""" in response:
+        return
+
+    if 'no relevant documents to summarize'.lower() in response.lower() and langchain_action == LangChainAction.SUMMARIZE_MAP.value:
+        return
+
+    # string of dict for output
+    response = ast.literal_eval(res_dict)['response']
+    print('base_model: %s langchain_mode: %s response: %s' % (base_model, langchain_mode, response), file=sys.stderr)
+    print(response)
+    assert 'REINFORCE'.lower() in response.lower()
+
+    assert res_dict['save_dict']['extra_dict']['num_prompt_tokens'] > 1000
 
 
+@wrap_test_forked
 def test_pdf_to_base_64_images():
     pdf_path = 'tests/2403.09629.pdf'
     from src.vision.utils_vision import pdf_to_base64_pngs
@@ -4921,3 +4964,23 @@ def test_pdf_to_base_64_images():
     assert len(base64_encoded_pngs) == 25
     base64_encoded_pngs = pdf_to_base64_pngs(pdf_path, quality=75, max_size=(1024, 1024), ext='jpg')
     assert len(base64_encoded_pngs) == 25
+
+    base64_encoded_pngs = pdf_to_base64_pngs(pdf_path, quality=75, max_size=(1024, 1024), ext='jpg', pages=[5, 7])
+    assert len(base64_encoded_pngs) == 2
+
+
+@wrap_test_forked
+def test_get_image_file():
+    image_control = None
+    from src.image_utils import get_image_file
+
+    for convert in [True, False]:
+        for str_bytes in [True, False]:
+            image_file = 'tests/jon.png'
+            assert len(get_image_file(image_file, image_control, 'All', convert=convert, str_bytes=str_bytes)) == 1
+
+            image_file = ['tests/jon.png']
+            assert len(get_image_file(image_file, image_control, 'All', convert=convert, str_bytes=str_bytes)) == 1
+
+            image_file = ['tests/jon.png', 'tests/fastfood.jpg']
+            assert len(get_image_file(image_file, image_control, 'All', convert=convert, str_bytes=str_bytes)) == 2

@@ -1,5 +1,19 @@
 ## Known issues
 
+### T5 Conditional or Sequence to Sequence models
+
+These can be supported by passing (or setting in the UI):
+```bash
+python generate.py --base_model=CohereForAI/aya-101 --load_4bit=True --add_disk_models_to_ui=False --force_seq2seq_type=True
+```
+or
+```bash
+python generate.py --base_model=CohereForAI/aya-101 --load_4bit=True --add_disk_models_to_ui=False --force_t5_type=True
+```
+although `CohereForAI/aya-101` is auto-detected as T5 Conditional already.
+
+![aya.png](aya.png)
+
 ### Gradio UI Audio Streaming
 
 Gradio 4.18.0+ fails to work for streaming audio from UI.  No audio is generated.  Waiting for bug fix: https://github.com/gradio-app/gradio/issues/7497.
@@ -225,7 +239,7 @@ export gptmore=0
 export visionmodels=1
 export enforce_h2ogpt_ui_key=False
 export top_k_docs=10
-export asr_model="distil-whisper/distil-large-v2"   #"openai/whisper-large-v3"
+export asr_model="distil-whisper/distil-large-v3"   #"openai/whisper-large-v3"
 export tts_model='microsoft/speecht5_tts'
 #export tts_model=''
 export max_max_new_tokens=8192
@@ -295,7 +309,7 @@ export gptmore=0
 export visionmodels=1
 export enforce_h2ogpt_ui_key=False
 export top_k_docs=-1
-#export asr_model="distil-whisper/distil-large-v2" #"openai/whisper-large-v3"
+#export asr_model="distil-whisper/distil-large-v3" #"openai/whisper-large-v3"
 export asr_model="openai/whisper-large-v3"
 export tts_model="tts_models/multilingual/multi-dataset/xtts_v2"
 export max_max_new_tokens=8192
@@ -640,6 +654,8 @@ If issues, try logging in via `huggingface-cli login` (run `git config --global 
 
 ### Text Embedding Inference Server
 
+Using TEI leads to much faster embedding generation as well as better memory leak avoidance due to [multi-threading and torch](https://github.com/pytorch/pytorch/issues/64412).
+
 Using docker for [TEI](https://github.com/huggingface/text-embeddings-inference?tab=readme-ov-file#docker):
 ```
 docker run -d --gpus '"device=0"' --shm-size 3g -v $HOME/.cache/huggingface/hub/:/data -p 5555:80 --pull always ghcr.io/huggingface/text-embeddings-inference:0.6 --model-id BAAI/bge-large-en-v1.5 --revision refs/pr/5 --hf-api-token=$HUGGING_FACE_HUB_TOKEN --max-client-batch-size=4096 --max-batch-tokens=2097152
@@ -648,11 +664,18 @@ where passing `--hf-api-token=$HUGGING_FACE_HUB_TOKEN` is only required if the m
 
 Then for h2oGPT ensure pass:
 ```bash
---hf_embedding_model=tei:http://localhost:5555 --cut_distance=10000
+python generate.py --hf_embedding_model=tei:http://localhost:5555 --cut_distance=10000 ...
 ```
 or whatever address is required.
 
-This leads to much faster embedding generation as well as better memory leak avoidance due to [multi-threading and torch](https://github.com/pytorch/pytorch/issues/64412).
+For some networks and GPU type combinations, you may require smaller batch sizes than the default of 1024, by doing, e.g. for Tesla T4 on AWS:
+```bash
+TEI_MAX_BATCH_SIZE=128 python generate.py --hf_embedding_model=tei:http://localhost:5555 --cut_distance=10000 ...
+```
+as required to avoid this error:
+```text
+requests.exceptions.HTTPError: 413 Client Error: Payload Too Large for url: http://localhost:5555/
+```
 
 To use the TEI directly, do the following for synchronous calls. Asynchronous calls also can be done.
 ```python
@@ -1006,7 +1029,7 @@ For Twitter, one can right-click on Twitter video, copy video address, then past
 
 ### Faster ASR
 
-For fast performance, one can use `distil-whisper/distil-large-v2` as the model, which is about 10x faster for similar accuracy.
+For fast performance, one can use `distil-whisper/distil-large-v3` or `distil-whisper/distil-large-v3` as the model, which is about 10x faster for similar accuracy.
 
 In addition, `faster_whisper` package can be used if using large v2 or v3, which is about 4x faster and 2x less memory for similar accuracy.
 

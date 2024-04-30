@@ -29,7 +29,7 @@ def run_cli(  # for local function:
         try_pdf_as_html=None,
         # for some evaluate args
         load_awq='',
-        stream_output=None, async_output=None, num_async=None,
+        stream_output=None, async_output=None, num_async=None, stream_map=None,
         prompt_type=None, prompt_dict=None, system_prompt=None,
         temperature=None, top_p=None, top_k=None, penalty_alpha=None, num_beams=None,
         max_new_tokens=None, min_new_tokens=None, early_stopping=None, max_time=None, repetition_penalty=None,
@@ -43,6 +43,13 @@ def run_cli(  # for local function:
         top_k_docs=None, chunk=None, chunk_size=None,
         pre_prompt_query=None, prompt_query=None,
         pre_prompt_summary=None, prompt_summary=None, hyde_llm_prompt=None,
+
+        user_prompt_for_fake_system_prompt=None,
+        json_object_prompt=None,
+        json_object_prompt_simpler=None,
+        json_code_prompt=None,
+        json_schema_instruction=None,
+
         image_audio_loaders=None,
         pdf_loaders=None,
         url_loaders=None,
@@ -65,6 +72,7 @@ def run_cli(  # for local function:
         hyde_template=None,
         hyde_show_only_final=None,
         hyde_show_intermediate_in_accordion=None,
+        map_reduce_show_intermediate_in_accordion=None,
         doc_json_mode=None,
         metadata_in_context=None,
         chatbot_role=None,
@@ -73,6 +81,12 @@ def run_cli(  # for local function:
         tts_speed=None,
         image_file=None,
         image_control=None,
+
+        response_format=None,
+        guided_json=None,
+        guided_regex=None,
+        guided_choice=None,
+        guided_grammar=None,
 
         # for evaluate kwargs
         captions_model=None,
@@ -106,7 +120,7 @@ def run_cli(  # for local function:
         answer_with_sources=None,
         append_sources_to_answer=None,
         append_sources_to_chat=None,
-        show_accordions=None,
+        sources_show_text_in_accordion=None,
         top_k_docs_max_show=None,
         show_link_in_sources=None,
         langchain_instruct_mode=None,
@@ -129,7 +143,7 @@ def run_cli(  # for local function:
     logging.getLogger("transformers").setLevel(logging.ERROR)
 
     from_ui = False
-    check_locals(**locals())
+    check_locals(**locals().copy())
 
     score_model = ""  # FIXME: For now, so user doesn't have to pass
     verifier_server = ""  # FIXME: For now, so user doesn't have to pass
@@ -154,7 +168,7 @@ def run_cli(  # for local function:
         fun = partial(evaluate,
                       *args,
                       **get_kwargs(evaluate, exclude_names=input_args_list + eval_func_param_names,
-                                   **locals()))
+                                   **locals().copy()))
 
         while True:
             clear_torch_cache(allow_skip=True)
@@ -171,8 +185,8 @@ def run_cli(  # for local function:
 
             # grab other parameters, like langchain_mode
             for k in eval_func_param_names:
-                if k in locals():
-                    eval_vars[eval_func_param_names.index(k)] = locals()[k]
+                if k in locals().copy():
+                    eval_vars[eval_func_param_names.index(k)] = locals().copy()[k]
 
             gener = fun(*tuple(eval_vars))
             outr = ''

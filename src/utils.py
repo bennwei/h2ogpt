@@ -1,4 +1,5 @@
 import ast
+import asyncio
 import contextlib
 import functools
 import gc
@@ -32,13 +33,14 @@ import pandas as pd
 import requests
 import uuid
 import re
+from packaging import version
 
 import tabulate
 from fire import inspectutils
 from joblib import Parallel
 from tqdm.auto import tqdm
 
-from src.enums import split_google
+from src.enums import split_google, invalid_json_str, docs_joiner_default, git_hash_unset
 from src.utils_procs import reulimit
 
 reulimit()
@@ -295,14 +297,14 @@ def _tar_data(root_dirs=None, tar_file=None, base_dir='./'):
 
 def save_generate_output(prompt=None, output=None, base_model=None, save_dir=None, where_from='unknown where from',
                          extra_dict={}, error='', sources=[], which_api='', valid_key=None,
-                         h2ogpt_key='', return_dict=False):
+                         h2ogpt_key='', return_dict=False, **kwargs_extra):
     if not save_dir:
         return
     try:
         return _save_generate_output(prompt=prompt, output=output, base_model=base_model, save_dir=save_dir,
                                      where_from=where_from, extra_dict=extra_dict, error=error, sources=sources,
                                      which_api=which_api, valid_key=valid_key, h2ogpt_key=h2ogpt_key,
-                                     return_dict=return_dict)
+                                     return_dict=return_dict, **kwargs_extra)
     except Exception as e:
         traceback.print_exc()
         print('Exception in saving: %s' % str(e))
@@ -321,7 +323,7 @@ def _save_generate_tokens(response_no_refs, extra_dict):
 def _save_generate_output(prompt=None, output=None, base_model=None, save_dir=None, where_from='unknown where from',
                           extra_dict={}, error='', sources=[], which_api='',
                           valid_key=None, h2ogpt_key='',
-                          return_dict=False):
+                          return_dict=False, **kwargs_extra):
     """
     Save conversation to .json, row by row.
     json_file_path is path to final JSON file. If not in ., then will attempt to make directories.
@@ -342,6 +344,7 @@ def _save_generate_output(prompt=None, output=None, base_model=None, save_dir=No
                         h2ogpt_key=h2ogpt_key,
                         )
     dict_to_save.update(extra_dict)
+    dict_to_save.update(kwargs_extra)
 
     if return_dict:
         return dict_to_save
@@ -394,14 +397,30 @@ def _s3up(filename):
 
 
 def get_githash():
+    githash = git_hash_unset
     try:
         githash = subprocess.run(['git', 'rev-parse', 'HEAD'], stdout=subprocess.PIPE).stdout.decode('utf-8')[0:-1]
-    except:
+        if githash in ['', None]:
+            githash = git_hash_unset
+    except Exception as e:
+        print("git failed to run: %s" % str(e))
+    if githash == git_hash_unset:
         try:
             with open('git_hash.txt', 'rt') as f:
-                githash = f.read()
+                githash = f.read().strip()
+        except Exception as e:
+            print("git_hash.txt failed to be found: %s" % str(e))
+
+    if githash == git_hash_unset:
+        try:
+            from src.version import __version__
+            githash = __version__
         except:
-            githash = "GET_GITHASH"
+            pass
+
+    if os.getenv('HARD_ASSERTS'):
+        assert is_full_git_hash(githash)
+
     return githash
 
 
@@ -464,18 +483,23 @@ class ThreadException(Exception):
 class EThread(threading.Thread):
     # Function that raises the custom exception
     def __init__(self, group=None, target=None, name=None,
-                 args=(), kwargs=None, *, daemon=None, streamer=None, bucket=None):
+                 args=(), kwargs=None, *, daemon=None, streamer=None, bucket=None,
+                 async_output=False):
         self.bucket = bucket
         self.streamer = streamer
         self.exc = None
         self._return = None
+        self.async_output = async_output
         super().__init__(group=group, target=target, name=name, args=args, kwargs=kwargs, daemon=daemon)
 
     def run(self):
         # Variable that stores the exception, if raised by someFunction
         try:
             if self._target is not None:
-                self._return = self._target(*self._args, **self._kwargs)
+                if self.async_output:
+                    self._return = asyncio.run(self._target(*self._args, **self._kwargs))
+                else:
+                    self._return = self._target(*self._args, **self._kwargs)
         except BaseException as e:
             print("thread exception: %s" % str(traceback.format_exc()))
             self.bucket.put(sys.exc_info())
@@ -718,7 +742,42 @@ def get_source(x):
     return x.metadata.get('source', "UNKNOWN SOURCE")
 
 
+def markdown_to_html(content):
+    import markdown
+
+    # Create a Markdown object
+    markdowner = markdown.Markdown()
+
+    # Convert the Markdown block to HTML
+    try:
+        html = markdowner.reset().convert(content)
+    except Exception as e:
+        # FIXME:
+        print("Invalid conversion of markdown to html: %s\n\n%s" % (content, str(e)))
+        html = content
+
+    return html
+
+
+def is_markdown(string):
+    """Returns True if the string is markdown, False otherwise."""
+
+    # Check for the presence of double square brackets
+    if re.search(r'\[\[.+?\]\]', string):
+        return True
+
+    # Check for the presence of angle brackets
+    if re.search(r'<.+?>', string):
+        return False
+
+    # If neither of the above patterns are found, assume the string is markdown
+    return True
+
+
 def get_accordion_named(content, title, font_size=8):
+    # content = content.replace('\n', '<br>')
+    if is_markdown(content):
+        content = markdown_to_html(content)
     return f"""<details><summary><font size="{font_size}">{title}</font></summary><font size="{font_size}">{content}</font></details>"""
 
 
@@ -1175,12 +1234,21 @@ def get_hf_server(inference_server):
             # i.e. just DNS or IP and no port or IP + port
             user = None
             password = None
-        elif len(inf_split) in [3, 4]:
+        elif len(inf_split) == 3:
             # i.e. just DNS or IP, no port + user + pass = 3
-            # i.e. DNS/IP + port + user + pass = 4
             user = inf_split[len(inf_split) - 2]
             password = inf_split[len(inf_split) - 1]
             ip_port_vllm = ':'.join(inf_split[:len(inf_split) - 2])
+        elif len(inf_split) == 4:
+            # i.e. DNS/IP + port + user + pass = 4
+            port = inf_split[len(inf_split) - 3]
+            user = inf_split[len(inf_split) - 2]
+            password = inf_split[len(inf_split) - 1]
+            if port not in [None, 'None']:
+                ip_port_vllm = ':'.join([inf_split[0], port])
+            else:
+                ip_port_vllm = inf_split[0]
+
         else:
             raise ValueError("Malformed inference_server=%s" % inference_server)
 
@@ -1208,11 +1276,12 @@ class FakeTokenizer:
                  tokenizer=None,
                  is_llama_cpp=False):
         if model_max_length is None:
-            assert not (is_openai or is_anthropic or is_google), "Should have set model_max_length for OpenAI or Anthropic or Google"
+            assert not (
+                    is_openai or is_anthropic or is_google), "Should have set model_max_length for OpenAI or Anthropic or Google"
             model_max_length = 2048
         self.is_openai = is_openai
         self.is_anthropic = is_anthropic
-        self.is_google= is_google
+        self.is_google = is_google
         self.is_hf = is_hf
         self.is_llama_cpp = is_llama_cpp
         self.tokenizer = tokenizer
@@ -2113,9 +2182,230 @@ def is_uuid4(string):
     return bool(pattern.match(string))
 
 
+def is_full_git_hash(s):
+    # This regex checks for exactly 40 hexadecimal characters.
+    return bool(re.fullmatch(r'[0-9a-f]{40}', s))
+
+
 def get_show_username(username1):
     if split_google in username1:
         show_username = split_google.join(username1.split(split_google)[0:1])
     else:
         show_username = username1
     return show_username
+
+
+# for extracting code blocks
+pattern = re.compile(r"```(.*?)(\n[\s\S]*?)?```", re.DOTALL)
+
+
+def get_code_blocks(response):
+    return pattern.findall(response)
+
+
+def get_json(response, fixup=True):
+    is_list = isinstance(response, list)
+    if not is_list:
+        response = [response]
+    response_new = [_get_json(x, fixup=fixup) for x in response]
+    if not is_list:
+        response_new = response_new[0]
+    return response_new
+
+
+def _get_json(response, fixup=True):
+    # First, try to extract code block content. If content is found (not an empty string), return None (or possibly an empty string as per updated logic)
+    response0 = extract_code_block_content(response)
+    if response0:
+        if fixup:
+            from json_repair import repair_json
+            try:
+                response0 = repair_json(response0)
+            except Exception as e:
+                # FIXME: best effort, don't understand if package will hae issues
+                print("repair_json exception1: %s: %s" % (str(e), response))
+        return response0
+    # Next, check if the response looks like JSON, return it if so
+    if looks_like_json(response):
+        response = response.strip()
+        if response.endswith('```'):
+            response = response[:-3].strip()
+        if fixup:
+            from json_repair import repair_json
+            try:
+                response = repair_json(response)
+            except Exception as e:
+                # FIXME: best effort, don't understand if package will hae issues
+                print("repair_json exception2: %s: %s" % (str(e), response))
+        return response
+    # If it doesn't look like JSON, return an empty string as a default case
+    return invalid_json_str
+
+
+# This pattern looks for the start of the text or any kind of newline followed by optional whitespace,
+# and then the code block delimiter (```).
+# It accounts for different newline characters and HTML line breaks.
+pattern_partial_codeblock = re.compile(r"(^|\n|\r|<br\s*/?>)\s*```")
+
+
+def has_starting_code_block(text):
+    # Search the text for the pattern
+    if pattern_partial_codeblock.search(text):
+        return True
+    else:
+        return False
+
+
+pattern_extract_codeblock = re.compile(r"```[a-zA-Z]*\s*(.*?)(```|$)", re.DOTALL)
+
+
+# pattern_extract_codeblock = re.compile(r"```(?:[a-zA-Z]*\s*)(.*?)(?=```|$)", re.DOTALL)
+
+
+def extract_code_block_content(stream_content):
+    # This pattern matches content starting from an opening code block delimiter (```)
+    # and captures everything after it until a closing delimiter or the end of string if no closing delimiter is found.
+    # Non-greedy matching is used to ensure it captures the earliest possible ending.
+
+    match = pattern_extract_codeblock.search(stream_content)
+    if match:
+        # Returns the captured group which is the content of the code block.
+        # The .strip() is used to remove any leading or trailing whitespace that might be present.
+        return match.group(1).strip()
+    else:
+        return ''
+
+
+def looks_like_json(text):
+    # Strip leading whitespace and check the first non-whitespace character
+    stripped_text = text.lstrip()
+
+    # Check if the text starts with '{', '[', or potentially a JSON string
+    if stripped_text.startswith(('{', '[', '"')):
+        return True
+
+    # Optionally, check for simple numeric values or null, true, false which are valid JSON
+    if re.match(r'(-?\d+(\.\d+)?([eE][+-]?\d+)?|null|true|false)\s*($|[,\]}])', stripped_text):
+        return True
+
+    return False
+
+
+def is_json_vllm(model, base_model, inference_server, verbose=False):
+    if inference_server and not inference_server.startswith('vllm') or not inference_server:
+        return False
+
+    if isinstance(model, dict) and 'client' in model:
+        openai_client = model['client']
+    else:
+        openai_client, _, _, _, _, _, _ = set_openai(inference_server, model_name=base_model)
+
+    vllm_version = get_vllm_version(openai_client, inference_server, verbose=verbose)
+    json_vllm_version = "0.4.0"  # The version to compare against
+
+    # Parse the version strings into comparable objects
+    parsed_vllm_version = version.parse(vllm_version)
+    parsed_json_vllm_version = version.parse(json_vllm_version)
+
+    # Compare the versions
+    if parsed_vllm_version >= parsed_json_vllm_version:
+        return True
+    else:
+        return False
+
+
+def get_vllm_version(openai_client, inference_server, verbose=False):
+    vllm_version = '0.3.0'
+    if inference_server.startswith('vllm'):
+        # https://github.com/vllm-project/vllm/blob/main/vllm/entrypoints/openai/api_server.py
+        parsed_url = str(openai_client.base_url).replace("/v1", "/version")
+        try:
+            response = requests.get(parsed_url, timeout=int(os.getenv('REQUEST_TIMEOUT', '30')))
+            if response.status_code == 200:
+                # Parsing the JSON response content to a dictionary
+                data = response.json()
+                # Accessing the version from the response
+                vllm_version = data.get('version', vllm_version)
+                if verbose:
+                    print(f"vLLM Server version: {vllm_version}")
+            else:
+                if verbose:
+                    print(f"Failed to retrieve version, status code: {response.status_code}")
+        except requests.exceptions.Timeout:
+            # if times out, assume new for newer usage
+            vllm_version = '0.4.0.post1'
+            print(f"vLLM Server version timeout, assuming: {vllm_version}")
+    return vllm_version
+
+
+def get_docs_tokens(tokenizer, text_context_list=[], max_input_tokens=None, docs_joiner=docs_joiner_default):
+    """
+    max_input_tokens: Over all LLM calls, upper limit of total token count,
+                      or single LLM call if want to know what docs fit into single call
+    """
+    if text_context_list is None or len(text_context_list) == 0:
+        return 0, None, 0
+    assert max_input_tokens is not None, "Must set max_input_tokens"
+    tokens = [get_token_count(x + docs_joiner, tokenizer) for x in text_context_list]
+    tokens_cumsum = np.cumsum(tokens)
+    where_res = np.where(tokens_cumsum < max_input_tokens)[0]
+    # if below condition fails, then keep top_k_docs=-1 and trigger special handling next
+    if where_res.shape[0] > 0:
+        top_k_docs = 1 + where_res[-1]
+        one_doc_size = None
+        num_doc_tokens = tokens_cumsum[top_k_docs - 1]  # by index
+    else:
+        # if here, means 0 and just do best with 1 doc
+        top_k_docs = 1
+        text_context_list = text_context_list[:top_k_docs]
+        # critical protection
+        from src.h2oai_pipeline import H2OTextGenerationPipeline
+        doc_content = text_context_list[0]
+        doc_content, new_tokens0 = H2OTextGenerationPipeline.limit_prompt(doc_content,
+                                                                          tokenizer,
+                                                                          max_prompt_length=max_input_tokens)
+        text_context_list[0] = doc_content
+        one_doc_size = len(doc_content)
+        num_doc_tokens = get_token_count(doc_content + docs_joiner, tokenizer)
+        print("Unexpected large chunks and can't add to context, will add 1 anyways.  Tokens %s -> %s" % (
+            tokens[0], new_tokens0), flush=True)
+    return top_k_docs, one_doc_size, num_doc_tokens
+
+
+def get_limited_text(hard_limit_tokens, text, tokenizer, verbose=False):
+    if tokenizer is None:
+        return text[:4 * hard_limit_tokens]
+
+    low = 0
+    high = len(text)
+    best_guess = text  # Initialize best_guess to ensure it's defined
+    ntokens0 = len(tokenizer.tokenize(best_guess))
+    ntokens = None
+
+    max_steps = 5
+    steps = 0
+    while low <= high:
+        mid = low + (high - low) // 2  # Calculate midpoint for current search interval
+        # Estimate a trial cut of the text based on mid
+        trial_text_length = max(int(mid * 4), 1)  # Using mid * 4 as an estimation, ensuring at least 1 character
+        trial_text = text[-trial_text_length:]  # Take text from the end, based on trial_text_length
+
+        # Tokenize the trial text and count tokens
+        ntokens = len(tokenizer.tokenize(trial_text))
+
+        if ntokens > hard_limit_tokens:
+            # If the trial exceeds the token limit, reduce 'high' to exclude the current trial length
+            high = mid - 1
+        else:
+            # If the trial does not exceed the token limit, update 'best_guess' and increase 'low'
+            best_guess = trial_text  # Update best_guess with the current trial_text
+            low = mid + 1  # Attempt to include more text in the next trial
+            if steps >= max_steps:
+                break
+        steps += 1
+
+    # 'best_guess' now contains the text that best fits the criteria
+    if verbose:
+        print("steps: %s ntokens0: %s/%s text0: %s ntokens: %s/%s text: %s" % (
+            steps, ntokens0, hard_limit_tokens, len(text), ntokens, hard_limit_tokens, len(best_guess)))
+    return best_guess

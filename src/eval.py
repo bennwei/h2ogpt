@@ -14,7 +14,7 @@ def run_eval(  # for local function:
         base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None, regenerate_gradio_clients=None,
         prompt_type=None, prompt_dict=None, system_prompt=None,
         debug=None, chat=False,
-        stream_output=None, async_output=None, num_async=None,
+        stream_output=None, async_output=None, num_async=None, stream_map=None,
         eval_filename=None, eval_prompts_only_num=None, eval_prompts_only_seed=None, eval_as_output=None,
         examples=None, memory_restriction_level=None,
         # evaluate kwargs
@@ -62,6 +62,13 @@ def run_eval(  # for local function:
         document_content_substrings_op=None,
         pre_prompt_query=None, prompt_query=None,
         pre_prompt_summary=None, prompt_summary=None, hyde_llm_prompt=None,
+
+        user_prompt_for_fake_system_prompt=None,
+        json_object_prompt=None,
+        json_object_prompt_simpler=None,
+        json_code_prompt=None,
+        json_schema_instruction=None,
+
         image_audio_loaders=None,
         pdf_loaders=None,
         url_loaders=None,
@@ -84,6 +91,7 @@ def run_eval(  # for local function:
         hyde_template=None,
         hyde_show_only_final=None,
         hyde_show_intermediate_in_accordion=None,
+        map_reduce_show_intermediate_in_accordion=None,
         doc_json_mode=None,
         metadata_in_context=None,
         chatbot_role=None,
@@ -92,6 +100,12 @@ def run_eval(  # for local function:
         tts_speed=None,
         image_file=None,
         image_control=None,
+
+        response_format=None,
+        guided_json=None,
+        guided_regex=None,
+        guided_choice=None,
+        guided_grammar=None,
 
         # for evaluate kwargs:
         captions_model=None,
@@ -126,7 +140,7 @@ def run_eval(  # for local function:
         answer_with_sources=None,
         append_sources_to_answer=None,
         append_sources_to_chat=None,
-        show_accordions=None,
+        sources_show_text_in_accordion=None,
         top_k_docs_max_show=None,
         show_link_in_sources=None,
         langchain_instruct_mode=None,
@@ -146,7 +160,7 @@ def run_eval(  # for local function:
     append_sources_to_answer = False
     append_sources_to_chat = False
 
-    check_locals(**locals())
+    check_locals(**locals().copy())
 
     if not context:
         context = ''
@@ -243,7 +257,7 @@ def run_eval(  # for local function:
             fun = partial(evaluate,
                           *args,
                           **get_kwargs(evaluate, exclude_names=input_args_list + eval_func_param_names,
-                                       **locals()))
+                                       **locals().copy()))
         else:
             assert eval_prompts_only_num > 0
 
@@ -275,8 +289,8 @@ def run_eval(  # for local function:
             # grab other parameters, like langchain_mode
             eval_vars = ex.copy()
             for k in eval_func_param_names:
-                if k in locals():
-                    eval_vars[eval_func_param_names.index(k)] = locals()[k]
+                if k in locals().copy():
+                    eval_vars[eval_func_param_names.index(k)] = locals().copy()[k]
 
             gener = fun(*tuple(eval_vars), exi=exi) if eval_as_output else fun(*tuple(eval_vars))
             for res_fun in gener:

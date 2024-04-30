@@ -1,29 +1,5 @@
 ## Known issues
 
-### T5 Conditional or Sequence to Sequence models
-
-These can be supported by passing (or setting in the UI):
-```bash
-python generate.py --base_model=CohereForAI/aya-101 --load_4bit=True --add_disk_models_to_ui=False --force_seq2seq_type=True
-```
-or
-```bash
-python generate.py --base_model=CohereForAI/aya-101 --load_4bit=True --add_disk_models_to_ui=False --force_t5_type=True
-```
-although `CohereForAI/aya-101` is auto-detected as T5 Conditional already.
-
-![aya.png](aya.png)
-
-### Gradio UI Audio Streaming
-
-Gradio 4.18.0+ fails to work for streaming audio from UI.  No audio is generated.  Waiting for bug fix: https://github.com/gradio-app/gradio/issues/7497.
-
-Workaround: Use gradio 4.17.0 or lower:
-```bash
-pip uninstall gradio gradio_client -y
-pip install gradio==4.17.0
-```
-
 ### nginx and K8s multi-pod support
 
 Gradio 4.x.y fails to support K8s multi-pod use. Specifically, the Gradio client on one pod can't reach a Gradio server on a nearby pod. For more information, see https://github.com/gradio-app/gradio/issues/6920 and https://github.com/gradio-app/gradio/issues/7317.
@@ -63,7 +39,119 @@ Other workarounds:
     ```
     However, 0.2.26 runs about 16 tokens/sec on 3090Ti on i9 while 0.2.56 runs at 65 tokens/sec for exact same model and prompt.
 
+
+
+
 ## Frequently asked questions
+
+### LLaMa-3
+
+LLaMa-3 and other newer models use a HuggingFace chat template to ensure accurate behavior.  So to run the models just do:
+```bash
+python generate.py --base_model=meta-llama/Meta-Llama-3-8B-Instruct
+```
+and h2oGPT will interpret this as an "unknown" prompt_type and use the chat template
+
+For GGUF etc. type models, to ensure accurate prompting, one passes the tokenizer from HF to h2oGPT via `tokenizer_base_model` like:
+```bash
+python generate.py --base_model=llama --model_path_llama=https://huggingface.co/QuantFactory/Meta-Llama-3-8B-Instruct-GGUF/resolve/main/Meta-Llama-3-8B-Instruct.Q5_K_M.gguf?download=true --tokenizer_base_model=meta-llama/Meta-Llama-3-8B-Instruct --max_seq_len=8192
+```
+and one should at least pass `max_seq_len` as well.  This ensures accurate prompting using the Meta chat template.  Note the download link just comes from picking the model in the model card's files section and clicking the up arrow then when the download file link is provided you can right click and copy that link.  HF keep changing how they present the download file, so adapt as required.
+
+To use offline, then do:
+```bash
+TRANSFORMERS_OFFLINE=1 python generate.py --base_model=llama --model_path_llama=Meta-Llama-3-8B-Instruct.Q5_K_M.gguf --tokenizer_base_model=meta-llama/Meta-Llama-3-8B-Instruct --max_seq_len=8192 --gradio_offline_level=2 --share=False --add_disk_models_to_ui=False
+```
+which assumes the model was downloaded to default location of `llamacpp_path`.  This works for offline if previously used the earlier command that got the tokenizer.
+
+Note the chat template is defined by the model card's [tokenizer_config.json](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct/blob/main/tokenizer_config.json#L2053).
+
+### Mixtral AWQ
+
+In our testing, most AWQ Mixtral builds are bad, e.g. `TheBloke/dolphin-2.7-mixtral-8x7b-AWQ` and `TheBloke/Mixtral-8x7B-Instruct-v0.1-AWQ`, generating repeats with RAG or no output at all.  We only found one that [works well](https://huggingface.co/casperhansen/mixtral-instruct-awq).  The vLLM options to run are:
+
+```
+... --port=5000 --host=0.0.0.0 --model casperhansen/mixtral-instruct-awq --seed 1234 --tensor-parallel-size=2 --max-num-batched-tokens=8192 --max-log-len=100 --trust-remote-code --worker-use-ray --enforce-eager --gpu-memory-utilization 0.98 --quantization awq
+```
+for 2 GPUs here, replacing ... with rest of docker or vLLM python commands.
+
+For 8x22b, we recommend https://huggingface.co/mistral-community/Mixtral-8x22B-v0.1-AWQ .
+
+### JSON mode and other Guided Generations for vLLM >= 0.4.0
+
+- [x] Can pass in `response_format=json_object` at CLI or API or UI to get json with best effort for each model type.
+- [x] Can pass in `response_format=json_code` at CLI or API or UI to get json via code block extraction and special prompting.  Works for most models even if don't support json mode directly, except smaller models like 1.8B Danube (many mistakes) or Google Gemma (one character mistakes).
+- [x] Can pass `guided_json` to specify the schema that should be a spec form with type and properties.  The actual json spec is inside properties.  See [vLLM guide](https://github.com/vllm-project/vllm/blob/c64cf38673780544087af5ad5d3baf879a29220b/tests/entrypoints/test_openai_server.py#L28-L73).
+- [x] If pass `guided_json` for vLLM >=0.4.0 and Anthropic Claude-3 instances (soon Google, OpenAI, MistralAI), then strictly follows format including keys, types, etc.
+- [x] Can pass separately guided_regex, guided_choice, guided_grammar for similar control.  These only work for vLLM >= 0.4.0.
+- [x] Handle old vLLM and other models that do not have json mode by using `json_code` mode effectively.
+- [x] When making JSON without guided_json schema, handle MistralAI and OpenAI directly using their JSON mode.
+
+h2oGPT in general uses guided_json like defined below to tell LLM the schema as part of prompt, unless vLLM >= 0.4.0 when this is provided directly to vLLM.  Schemas like `guided_json` are not required for JSON mode, but to follow some schema it is required, and only vLLM >= 0.4.0 will strictly follow the schema due to guided generation using outlines package.
+
+Example `guided_json`, `guided_regex`, `guided_choice` schemas to be passed in as string to h2oGPT.
+```
+guided_json = {
+    "type": "object",
+    "properties": {
+        "name": {
+            "type": "string"
+        },
+        "age": {
+            "type": "integer"
+        },
+        "skills": {
+            "type": "array",
+            "items": {
+                "type": "string",
+                "maxLength": 10
+            },
+            "minItems": 3
+        },
+        "work history": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "company": {
+                        "type": "string"
+                    },
+                    "duration": {
+                        "type": "string"
+                    },
+                    "position": {
+                        "type": "string"
+                    }
+                },
+                "required": ["company", "position"]
+            }
+        }
+    },
+    "required": ["name", "age", "skills", "work history"]
+}
+
+guided_regex = (r"((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.){3}"
+              r"(25[0-5]|(2[0-4]|1\d|[1-9]|)\d)")
+
+guided_choice = [
+    "Python", "Java", "JavaScript", "C++", "C#", "PHP", "TypeScript", "Ruby",
+    "Swift", "Kotlin"
+]
+```
+
+### T5 Conditional or Sequence to Sequence models
+
+These can be supported by passing (or setting in the UI):
+```bash
+python generate.py --base_model=CohereForAI/aya-101 --load_4bit=True --add_disk_models_to_ui=False --force_seq2seq_type=True
+```
+or
+```bash
+python generate.py --base_model=CohereForAI/aya-101 --load_4bit=True --add_disk_models_to_ui=False --force_t5_type=True
+```
+although `CohereForAI/aya-101` is auto-detected as T5 Conditional already.
+
+![aya.png](aya.png)
 
 ### Running oLLaMa vs. h2oGPT as inference server
 
@@ -112,7 +200,6 @@ Examples of what to put into "server" in UI or for `<server>` when using `--infe
 * oLLaMa: `vllm_chat:http://localhost:11434/v1/`
 * vLLM: `vllm:111.111.111.111:5005`
    * For llama-13b, e.g. `--model_lock="[{'inference_server':'vllm:111.11.111.111:5001', 'base_model':'h2oai/h2ogpt-4096-llama2-13b-chat'}`
-   * For groq, ensure groq API key is used,, e.g. `--model_lock="[{'inference_server':'vllm:https://api.groq.com/openai:None:/v1:<api key>', 'base_model':'mixtral-8x7b-32768', 'max_seq_len': 31744, 'prompt_type':'plain'}]"`
 * vLLM Chat API: `vllm_chat`
   * E.g. `vllm_chat:https://gpt.h2o.ai:5000/v1` (only for no auth setup)
   * E.g. `vllm_chat:https://vllm.h2o.ai:None:/1b1219f7-4bb4-43e9-881f-fa8fa9fe6e04/v1:1234ABCD` (keyed access)
@@ -350,7 +437,7 @@ The vLLMs/TGIs are started with these options on various machines.
 
 For 8*A100 80GB, `go_VLLM.12.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0
+docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
 mkdir -p $HOME/.cache/huggingface/hub
 
 docker run -d \
@@ -365,7 +452,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5000 \
         --host=0.0.0.0 \
         --model=h2oai/h2ogpt-4096-llama2-70b-chat \
@@ -388,7 +475,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0-180 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0-180 -m vllm.entrypoints.openai.api_server \
         --port=5002 \
         --host=0.0.0.0 \
         --model=HuggingFaceH4/zephyr-7b-beta \
@@ -412,7 +499,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5001 \
         --host=0.0.0.0 \
         --model=h2oai/h2ogpt-4096-llama2-13b-chat \
@@ -435,7 +522,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5003 \
         --host=0.0.0.0 \
         --model=h2oai/h2ogpt-32k-codellama-34b-instruct \
@@ -458,7 +545,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5004 \
         --host=0.0.0.0 \
         --model=mistralai/Mistral-7B-Instruct-v0.2 \
@@ -472,7 +559,7 @@ and run `bash ./go_VLLM.12.sh` on that machine.
 
 On another 4*A100 80GB, `go_VLLM.28.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0
+docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
 mkdir -p $HOME/.cache/huggingface/hub
 
 # TGI
@@ -490,7 +577,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5001 \
         --host=0.0.0.0 \
         --model=Nexusflow/NexusRaven-V2-13B \
@@ -512,7 +599,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5005 \
         --host=0.0.0.0 \
         --model=openchat/openchat-3.5-1210 \
@@ -524,7 +611,7 @@ and run `bash ./go_VLLM.28.sh`.
 
 For another 4*A100 80GB, `go_VLLM.22.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0
+docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
 mkdir -p $HOME/.cache/huggingface/hub
 
 docker run -d \
@@ -539,7 +626,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5000 \
         --host=0.0.0.0 \
         --model=NousResearch/Nous-Capybara-34B \
@@ -565,7 +652,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5016 \
         --host=0.0.0.0 \
         --model=google/gemma-7b-it \
@@ -581,7 +668,7 @@ and run `bash ./go_VLLM.144.sh`.
 
 For another 2*A10G, `go_VLLM.199.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0
+docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
 mkdir -p $HOME/.cache/huggingface/hub
 
 docker run -d \
@@ -596,7 +683,7 @@ docker run -d \
     -u `id -u`:`id -g` \
     -v "${HOME}"/.cache:/workspace/.cache \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 -m vllm.entrypoints.openai.api_server \
+    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
         --port=5014 \
         --host=0.0.0.0 \
         --model=h2oai/h2o-danube-1.8b-chat \
@@ -626,14 +713,15 @@ if [ 1 -eq 1 ]
    then
 export CUDA_VISIBLE_DEVICES=1
 export worker_port=40000
-python -m llava.serve.model_worker --host 0.0.0.0 --controller http://xxx.xxx.xxx.144:$server_port --port $worker_port --worker http://xxx.xxx.xxx.144:$worker_port --model-path liuhaotian/llava-v1.6-vicuna-13b &> 2.log &
+python -m llava.serve.model_worker --host 0.0.0.0 --controller http://xxx.xxx.xxx.144:$server_port --port $worker_port --worker http://xxx.xxx.xxx.144:$worker_port --model-path liuhaotian/llava-v1.6-vicuna-13b --limit-model-concurrency 5 &> 2.log &
 fi
 
 if [ 1 -eq 1 ]
    then
 export CUDA_VISIBLE_DEVICES=3
 export worker_port=40002
-python -m llava.serve.model_worker --host 0.0.0.0 --controller http://xxx.xxx.xxx.144:$server_port --port $worker_port --worker http://xxx.xxx.xxx.144:$worker_port --model-path liuhaotian/llava-v1.6-34b &>> 34b.log &
+export GRADIO_SERVER_PORT=7860
+python -m llava.serve.model_worker --host 0.0.0.0 --controller http://xxx.xxx.xxx.144:$server_port --port $worker_port --worker http://xxx.xxx.xxx.144:$worker_port --model-path liuhaotian/llava-v1.6-34b --limit-model-concurrency 5 &>> 34b.log &
 fi
 
 sleep 30
@@ -1077,7 +1165,7 @@ docker run \
       -u `id -u`:`id -g` \
       -v "${HOME}"/.cache:/workspace/.cache \
       -v "${HOME}"/save:/workspace/save \
-      gcr.io/vorvan/h2oai/h2ogpt-runtime:0.1.0 /workspace/generate.py \
+      gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 /workspace/generate.py \
          --base_model=HuggingFaceH4/zephyr-7b-beta \
          --use_safetensors=True \
          --prompt_type=zephyr \

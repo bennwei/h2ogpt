@@ -2,6 +2,8 @@ from enum import Enum
 
 
 class PromptType(Enum):
+    template = -3
+    unknown = -2
     custom = -1
     plain = 0
     instruct = 1
@@ -226,6 +228,14 @@ claude3imagetag = 'claude-3-image'
 gpt4imagetag = 'gpt-4-image'
 geminiimagetag = 'gemini-image'
 
+claude3_image_tokens = 1334
+gemini_image_tokens = 5000
+gpt4_image_tokens = 1000
+
+llava16_image_tokens = 2880
+llava16_model_max_length = 4096
+llava16_image_fudge = 50
+
 # https://cloud.google.com/vertex-ai/generative-ai/docs/model-reference/gemini
 #  Invalid argument provided to Gemini: 400 Please use fewer than 16 images in your request to models/gemini-pro-vision
 # 4MB *total* limit of any prompt.  But only supports 16 images when doing fileData, needs to point to some gcp location
@@ -237,6 +247,9 @@ claude3image_num_max = 20
 # https://platform.openai.com/docs/guides/vision
 # 20MB per image
 gpt4image_num_max = 10
+
+# can be any number, but queued after --limit-model-concurrency <number> for some <number> e.g. 5
+llava_num_max = 10
 
 # https://ai.google.dev/models/gemini
 # gemini-1.0-pro
@@ -268,6 +281,7 @@ mistralai_mapping = {
     "mistral-tiny": 32768,
     'open-mistral-7b': 32768,
     'open-mixtral-8x7b': 32768,
+    'open-mixtral-8x22b': 32768*2,
     'mistral-small-latest': 32768,
     'mistral-medium-latest': 32768,
 }
@@ -279,6 +293,7 @@ mistralai_mapping_outputs = {
     "mistral-tiny": 32768,
     'open-mistral-7b': 32768,
     'open-mixtral-8x7b': 32768,
+    'open-mixtral-8x22b': 32768*2,
     'mistral-small-latest': 32768,
     'mistral-medium-latest': 32768,
 }
@@ -363,7 +378,7 @@ def get_langchain_prompts(pre_prompt_query, prompt_query, pre_prompt_summary, pr
         prompt_query1 = "According to only the information in the document sources provided within the context above, write an insightful and well-structured response to: "
 
     pre_prompt_summary1 = """In order to write a concise single-paragraph or bulleted list summary, pay attention to the following text."""
-    prompt_summary1 = "Using only the information in the document sources above, write a condensed and concise summary of key results (preferably as bullet points)."
+    prompt_summary1 = "Using only the information in the document sources above, write a condensed and concise summary of key results (preferably as about 10 bullet points)."
 
     hyde_llm_prompt1 = "Answer this question with vibrant details in order for some NLP embedding model to use that answer as better query than original question: "
 
@@ -551,8 +566,27 @@ max_docs_public_api = 2 * max_docs_public
 max_chunks_per_doc_public = 5000
 max_chunks_per_doc_public_api = 2 * max_chunks_per_doc_public
 
-user_prompt_for_fake_system_prompt = "Who are you and what do you do?"
+user_prompt_for_fake_system_prompt0 = "Who are you and what do you do?"
+json_object_prompt0 = 'Ensure your entire response is outputted as a single piece of strict valid JSON text.'
+json_object_prompt_simpler0 = 'Ensure your response is strictly valid JSON text.'
+json_code_prompt0 = 'Ensure your entire response is outputted as strict valid JSON text inside a Markdown code block with the json language identifier.'
+json_schema_instruction0 = 'Ensure you follow this JSON schema:\n```json\n{properties_schema}\n```'
 
 coqui_lock_name = 'coqui'
 
 split_google = "::::::::::"
+
+response_formats = ['text', 'json_object', 'json_code']
+
+invalid_json_str = '{}'
+
+summary_prefix = 'Summarize Collection : '
+extract_prefix = 'Extract Collection : '
+
+noop_prompt_type = 'plain'
+unknown_prompt_type = 'unknown'  # or None or '' are valid
+template_prompt_type = 'template'  # for only chat template but not other special (e.g. grounded) templates
+
+git_hash_unset = "GET_GITHASH_UNSET"
+
+none = ['', '\n', None]

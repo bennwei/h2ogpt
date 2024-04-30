@@ -4,6 +4,8 @@ import time
 import uuid
 from collections import deque
 
+import filelock
+
 from log import logger
 from openai_server.backend_utils import convert_messages_to_structure
 
@@ -88,6 +90,10 @@ def get_client(user=None):
         client = get_gradio_client(user=user)
     elif hasattr(gradio_client, 'clone'):
         client = gradio_client.clone()
+        if client.get_server_hash() != gradio_client.server_hash:
+            os.makedirs('locks', exist_ok=True)
+            with filelock.FileLock(os.path.join('locks', 'openai_gradio_client.lock')):
+                gradio_client.refresh_client()
     else:
         print(
             "re-get to ensure concurrency ok, slower if API is large, for speed ensure gradio_utils/grclient.py exists.")
@@ -143,6 +149,11 @@ def get_response(instruction, gen_kwargs, verbose=False, chunk_response=True, st
         # presence_penalty=(repetition_penalty - 1.0) * 2.0 + 0.0,  # so good default
         gen_kwargs['repetition_penalty'] = 0.5 * (gen_kwargs['presence_penalty'] - 0.0) + 1.0
 
+    if gen_kwargs.get('response_format'):
+        # pydantic ensures type and key
+        # transcribe to h2oGPT way of just value
+        gen_kwargs['response_format'] = gen_kwargs.get('response_format')['type']
+
     kwargs.update(**gen_kwargs)
 
     # concurrent gradio client
@@ -170,7 +181,7 @@ def get_response(instruction, gen_kwargs, verbose=False, chunk_response=True, st
                     yield response
                 last_response = response
             job_outputs_num += job_outputs_num_new
-            time.sleep(0.01)
+            time.sleep(0.005)
 
         outputs_list = job.outputs().copy()
         job_outputs_num_new = len(outputs_list[job_outputs_num:])

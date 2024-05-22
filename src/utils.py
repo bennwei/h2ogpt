@@ -1073,11 +1073,6 @@ class _ForkDataContext(threading.local):
 
 forkdatacontext = _ForkDataContext()
 
-# Add user info
-username = getpass.getuser()
-current_working_directory = os.getcwd()
-operating_system = platform.system()
-
 
 def _traced_func(func, *args, **kwargs):
     func, args, kwargs = forkdatacontext.get_args_kwargs_for_traced_func(func, args, kwargs)
@@ -1152,13 +1147,6 @@ except (PackageNotFoundError, AssertionError):
 try:
     assert distribution('faiss_cpu') is not None
     have_faiss = True
-except (PackageNotFoundError, AssertionError):
-    pass
-
-have_chromamigdb = False
-try:
-    assert distribution('chromamigdb') is not None
-    have_chromamigdb = True
 except (PackageNotFoundError, AssertionError):
     pass
 
@@ -1583,7 +1571,7 @@ def set_openai(inference_server, model_name=None):
             if api_version in ['None', None]:
                 # for function tools support
                 # https://github.com/Azure/azure-rest-api-specs/tree/main/specification/cognitiveservices/data-plane/AzureOpenAI/inference/preview/2023-12-01-preview
-                api_version = "2023-12-01-preview"
+                api_version = "2024-04-01-preview"
             if os.getenv('OPENAI_AZURE_KEY') is not None:
                 # use this instead if exists
                 api_key = os.getenv("OPENAI_AZURE_KEY")
@@ -1671,7 +1659,10 @@ def return_good_url(url):
     for prefix in ['', 'https://', 'http://', 'https://www.', 'http://www.']:
         try:
             url_test = prefix + url
-            response = requests.head(url_test)
+            response = requests.head(url_test, timeout=10)
+        except requests.exceptions.Timeout as e:
+            response = None
+            url_test = None
         except Exception as e:
             response = None
             url_test = None
@@ -1705,6 +1696,12 @@ def dict_to_html(x, small=True, api=False):
             return res
 
 
+def split_into_sentences(text):
+    # Split text by specified punctuation followed by space or end of text
+    sentences = re.split(r'(?<=[.!?]) +', text)
+    return sentences
+
+
 def text_to_html(x, api=False):
     if api:
         return x
@@ -1718,11 +1715,11 @@ def text_to_html(x, api=False):
         white-space: -o-pre-wrap;
         word-wrap: break-word;
       }
-    </style>
+</style>
 <pre>
 %s
 </pre>
-""" % x
+""" % '<br>'.join(split_into_sentences(x))
 
 
 def lg_to_gr(
@@ -2000,14 +1997,15 @@ def str_to_dict(x):
     return x
 
 
-def get_token_count(x, tokenizer, token_count_fun=None):
+def get_token_count(x, tokenizer, token_count_fun=None, add_special_tokens=True):
     # NOTE: Somewhat duplicates H2OTextGenerationPipeline.get_token_count()
     # handle ambiguity in if get dict or list
+    other_kwargs = dict(add_special_tokens=add_special_tokens) if hasattr(tokenizer, 'add_special_tokens') else {}
     if tokenizer is not None:
         if hasattr(tokenizer, 'encode'):
-            tokens = tokenizer.encode(x)
+            tokens = tokenizer.encode(x, **other_kwargs)
         else:
-            tokens = tokenizer(x)
+            tokens = tokenizer(x, **other_kwargs)
         if isinstance(tokens, dict) and 'input_ids' in tokens:
             tokens = tokens['input_ids']
         if isinstance(tokens, list):
@@ -2020,7 +2018,8 @@ def get_token_count(x, tokenizer, token_count_fun=None):
             raise RuntimeError("Cannot handle tokens: %s" % tokens)
     elif token_count_fun is not None:
         assert callable(token_count_fun)
-        n_tokens = token_count_fun(x)
+        other_kwargs = dict(add_special_tokens=add_special_tokens) if hasattr(token_count_fun, 'add_special_tokens') else {}
+        n_tokens = token_count_fun(x, **other_kwargs)
     else:
         tokenizer = FakeTokenizer()
         n_tokens = tokenizer.num_tokens_from_string(x)
@@ -2348,7 +2347,7 @@ def get_docs_tokens(tokenizer, text_context_list=[], max_input_tokens=None, docs
     assert max_input_tokens is not None, "Must set max_input_tokens"
     tokens = [get_token_count(x + docs_joiner, tokenizer) for x in text_context_list]
     tokens_cumsum = np.cumsum(tokens)
-    where_res = np.where(tokens_cumsum < max_input_tokens)[0]
+    where_res = np.where(tokens_cumsum <= max_input_tokens)[0]
     # if below condition fails, then keep top_k_docs=-1 and trigger special handling next
     if where_res.shape[0] > 0:
         top_k_docs = 1 + where_res[-1]
@@ -2409,3 +2408,25 @@ def get_limited_text(hard_limit_tokens, text, tokenizer, verbose=False):
         print("steps: %s ntokens0: %s/%s text0: %s ntokens: %s/%s text: %s" % (
             steps, ntokens0, hard_limit_tokens, len(text), ntokens, hard_limit_tokens, len(best_guess)))
     return best_guess
+
+
+def deduplicate_names(names):
+    # Dictionary to hold the counts of each name
+    name_counts = {}
+    # List to store the final results
+    deduplicated_names = []
+
+    for name in names:
+        # Check if the name already exists in the dictionary
+        if name in name_counts:
+            # Increment the count for this name
+            name_counts[name] += 1
+            # Append the new name with the count as a suffix
+            deduplicated_names.append(f"{name}_{name_counts[name]}")
+        else:
+            # Add the name to the dictionary with a count of 0
+            name_counts[name] = 0
+            # Append the name as it is the first occurrence
+            deduplicated_names.append(name)
+
+    return deduplicated_names

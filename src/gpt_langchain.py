@@ -38,7 +38,7 @@ from langchain.callbacks.base import Callbacks
 from langchain_community.document_transformers import Html2TextTransformer, BeautifulSoupTransformer
 from langchain_community.embeddings import HuggingFaceInstructEmbeddings
 from langchain_community.llms.huggingface_pipeline import VALID_TASKS
-from langchain.llms.utils import enforce_stop_tokens
+from langchain_community.llms.utils import enforce_stop_tokens
 from langchain.prompts.chat import ChatPromptValue
 from langchain.schema import LLMResult, Generation, PromptValue
 from langchain.schema.output import GenerationChunk
@@ -65,7 +65,7 @@ from utils import wrapped_partial, EThread, import_matplotlib, sanitize_filename
     get_device, ProgressParallel, remove, hash_file, clear_torch_cache, NullContext, get_hf_server, FakeTokenizer, \
     have_libreoffice, have_arxiv, have_playwright, have_selenium, have_tesseract, have_doctr, have_pymupdf, set_openai, \
     get_list_or_str, have_pillow, only_selenium, only_playwright, only_unstructured_urls, get_short_name, \
-    get_accordion, have_jq, get_doc, get_source, have_chromamigdb, get_token_count, reverse_ucurve_list, get_size, \
+    get_accordion, have_jq, get_doc, get_source, get_token_count, reverse_ucurve_list, get_size, \
     get_test_name_core, download_simple, have_fiftyone, have_librosa, return_good_url, n_gpus_global, \
     get_accordion_named, hyde_titles, have_cv2, FullSet, create_relative_symlink, split_list, get_gradio_tmp, \
     merge_dict, get_docs_tokens, markdown_to_html, is_markdown
@@ -85,7 +85,8 @@ from prompter import non_hf_types, PromptType, Prompter, get_vllm_extra_dict, sy
     is_vision_model, is_gradio_vision_model, is_json_model
 from src.serpapi import H2OSerpAPIWrapper
 from utils_langchain import StreamingGradioCallbackHandler, _chunk_sources, _add_meta, add_parser, fix_json_meta, \
-    load_general_summarization_chain, H2OHuggingFaceHubEmbeddings, make_sources_file
+    load_general_summarization_chain, H2OHuggingFaceHubEmbeddings, make_sources_file, select_docs_with_score, \
+    split_merge_docs
 
 # to check imports
 # find ./src -name '*.py' |  xargs awk '{ if (sub(/\\$/, "")) printf "%s ", $0; else print; }' |  grep 'from langchain\.' |  sed 's/^[ \t]*//' > go.py
@@ -110,9 +111,10 @@ from langchain.text_splitter import Language, RecursiveCharacterTextSplitter, Te
 from langchain.chains.question_answering import load_qa_chain
 from langchain.docstore.document import Document
 from langchain.prompts import PromptTemplate
-from langchain_community.llms import HuggingFaceTextGenInference, HuggingFacePipeline
+#from langchain_community.llms import HuggingFaceTextGenInference, HuggingFacePipeline  # pycharm doesn't recognize parameters if use this
+from langchain_community.llms.huggingface_text_gen_inference import HuggingFaceTextGenInference
+from langchain_community.llms import HuggingFacePipeline
 from langchain_community.vectorstores import Chroma
-from chromamig import ChromaMig
 
 
 def get_context_cast():
@@ -129,7 +131,6 @@ def get_db(sources, use_openai_embedding=False, db_type='faiss',
            collection_name=None,
            hf_embedding_model=None,
            migrate_embedding_model=False,
-           auto_migrate_db=False,
            n_jobs=-1,
            verbose=False):
     if not sources:
@@ -178,7 +179,7 @@ def get_db(sources, use_openai_embedding=False, db_type='faiss',
                                        location=":memory:")
 
     elif db_type in ['chroma', 'chroma_old']:
-        assert persist_directory is not None
+        assert persist_directory, "persist_directory not filled"
         # use_base already handled when making persist_directory, unless was passed into get_db()
         makedirs(persist_directory, exist_ok=True)
 
@@ -187,7 +188,7 @@ def get_db(sources, use_openai_embedding=False, db_type='faiss',
             get_existing_db(None, persist_directory, load_db_if_exists, db_type,
                             use_openai_embedding,
                             langchain_mode, langchain_mode_paths, langchain_mode_types,
-                            hf_embedding_model, migrate_embedding_model, auto_migrate_db,
+                            hf_embedding_model, migrate_embedding_model,
                             verbose=False,
                             n_jobs=n_jobs)
         if db is None:
@@ -197,8 +198,7 @@ def get_db(sources, use_openai_embedding=False, db_type='faiss',
                 from chromadb.config import Settings
                 settings_extra_kwargs = dict(is_persistent=True)
             else:
-                from chromamigdb.config import Settings
-                settings_extra_kwargs = dict(chroma_db_impl="duckdb+parquet")
+                raise RuntimeError("Migration no longer supported")
             client_settings = Settings(anonymized_telemetry=False,
                                        persist_directory=persist_directory,
                                        **settings_extra_kwargs)
@@ -228,7 +228,7 @@ def get_db(sources, use_openai_embedding=False, db_type='faiss',
                     db = Chroma.from_documents(documents=sources_batch, **from_kwargs)
                     db.persist()
             else:
-                db = ChromaMig.from_documents(documents=sources, **from_kwargs)
+                raise RuntimeError("Migration no longer supported")
             clear_embedding(db)
             save_embed(db, use_openai_embedding, hf_embedding_model)
         else:
@@ -408,7 +408,7 @@ def add_to_db(db, sources, db_type='faiss',
 def create_or_update_db(db_type, persist_directory, collection_name,
                         user_path, langchain_type,
                         sources, use_openai_embedding, add_if_exists, verbose,
-                        hf_embedding_model, migrate_embedding_model, auto_migrate_db,
+                        hf_embedding_model, migrate_embedding_model,
                         n_jobs=-1):
     if not os.path.isdir(persist_directory) or not add_if_exists:
         if os.path.isdir(persist_directory):
@@ -466,7 +466,6 @@ def create_or_update_db(db_type, persist_directory, collection_name,
                 langchain_mode_types={collection_name: langchain_type},
                 hf_embedding_model=hf_embedding_model,
                 migrate_embedding_model=migrate_embedding_model,
-                auto_migrate_db=auto_migrate_db,
                 n_jobs=n_jobs,
                 verbose=verbose,
                 )
@@ -917,6 +916,7 @@ class GradioInference(AGenerateStreamFirst, H2Oagenerate, LLM):
     json_object_prompt: Any = None
     json_object_prompt_simpler: Any = None
     json_code_prompt: Any = None
+    json_code_prompt_if_no_schema: Any = None
     json_schema_instruction: Any = None
 
     system_prompt: Any = None
@@ -931,6 +931,7 @@ class GradioInference(AGenerateStreamFirst, H2Oagenerate, LLM):
     guided_regex: Any = None
     guided_choice: Any = None
     guided_grammar: Any = None
+    guided_whitespace_pattern: Any = None
 
     async_sem: Any = None
     count_input_tokens: Any = 0
@@ -1043,6 +1044,7 @@ class GradioInference(AGenerateStreamFirst, H2Oagenerate, LLM):
                              json_object_prompt=self.json_object_prompt,
                              json_object_prompt_simpler=self.json_object_prompt_simpler,
                              json_code_prompt=self.json_code_prompt,
+                             json_code_prompt_if_no_schema=self.json_code_prompt_if_no_schema,
                              json_schema_instruction=self.json_schema_instruction,
                              system_prompt=self.system_prompt,
                              image_audio_loaders=None,  # don't need to further do doc specific things
@@ -1076,6 +1078,7 @@ class GradioInference(AGenerateStreamFirst, H2Oagenerate, LLM):
                              guided_regex=self.guided_regex,
                              guided_choice=self.guided_choice,
                              guided_grammar=self.guided_grammar,
+                             guided_whitespace_pattern=self.guided_whitespace_pattern,
                              )
         api_name = '/submit_nochat_api'  # NOTE: like submit_nochat but stable API for string dict passing
         # let inner gradio count input tokens
@@ -1483,7 +1486,6 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
     repetition_penalty: Optional[float] = None
     return_full_text: bool = False
     stop_sequences: List[str] = Field(default_factory=list)
-    seed: Optional[int] = None
     inference_server_url: str = ""
     timeout: int = 300
     headers: dict = None
@@ -1500,13 +1502,11 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
     prompts: Any = []
     count_output_tokens: Any = 0
 
-    def _call(
-            self,
-            prompt: str,
-            stop: Optional[List[str]] = None,
-            run_manager: Optional[CallbackManagerForLLMRun] = None,
-            **kwargs: Any,
-    ) -> str:
+    base_model: Any = ''
+    image_file: Any = None
+    image_control: Any = None
+
+    def prep_prompt(self, prompt, stop, kwargs):
         if stop is None:
             stop = self.stop_sequences.copy()
         else:
@@ -1529,6 +1529,16 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
         self.count_input_tokens += self.get_num_tokens(str(prompt))
         self.prompts.append(prompt)
 
+        if self.image_file:
+            prompt = ''.join([f'![]({x})!' for x in self.image_file]) + prompt
+            self.count_input_tokens += 64 * len(self.image_file)
+
+            data_point = dict(context=self.context, instruction=prompt, input=self.iinput)
+            prompt = self.prompter.generate_prompt(data_point,
+                                                   chat_conversation=self.chat_conversation,
+                                                   user_prompt_for_fake_system_prompt=self.user_prompt_for_fake_system_prompt,
+                                                   )
+
         gen_server_kwargs = dict(do_sample=self.do_sample,
                                  seed=self.seed,
                                  stop_sequences=stop,
@@ -1543,6 +1553,17 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
                                  )
         gen_server_kwargs.update(kwargs)
 
+        return prompt, gen_server_kwargs, stop
+
+    def _call(
+            self,
+            prompt: str,
+            stop: Optional[List[str]] = None,
+            run_manager: Optional[CallbackManagerForLLMRun] = None,
+            **kwargs: Any,
+    ) -> str:
+        prompt, gen_server_kwargs, stop = self.prep_prompt(prompt, stop, kwargs)
+
         # lower bound because client is re-used if multi-threading
         self.client.timeout = max(300, self.timeout)
 
@@ -1552,6 +1573,7 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
                 **gen_server_kwargs,
             )
             if self.return_full_text:
+                assert not self.image_file, "Invalid use of image files with HF client"
                 gen_text = res.generated_text[len(prompt):]
             else:
                 gen_text = res.generated_text
@@ -1559,9 +1581,7 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
             for stop_seq in stop:
                 if stop_seq in gen_text:
                     gen_text = gen_text[:gen_text.index(stop_seq)]
-            text = prompt + gen_text
-            text = self.prompter.get_response(text, prompt=prompt,
-                                              sanitize_bot_response=self.sanitize_bot_response)
+            text = gen_text
         else:
             text_callback = None
             if run_manager:
@@ -1573,8 +1593,6 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
             for response in self.client.generate_stream(prompt, **gen_server_kwargs):
                 text_chunk = response.token.text
                 text += text_chunk
-                text = self.prompter.get_response(prompt + text, prompt=prompt,
-                                                  sanitize_bot_response=self.sanitize_bot_response)
                 # stream part
                 is_stop = False
                 for stop_seq in stop:
@@ -1598,25 +1616,8 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
     ) -> str:
         if self.verbose:
             print("acall", flush=True)
-        if stop is None:
-            stop = self.stop_sequences.copy()
-        else:
-            stop += self.stop_sequences.copy()
-        stop_tmp = stop.copy()
-        stop = []
-        [stop.append(x) for x in stop_tmp if x not in stop]
 
-        # HF inference server needs control over input tokens
-        assert self.tokenizer is not None
-        from h2oai_pipeline import H2OTextGenerationPipeline
-        prompt, num_prompt_tokens = H2OTextGenerationPipeline.limit_prompt(prompt, self.tokenizer)
-
-        # NOTE: TGI server does not add prompting, so must do here
-        data_point = dict(context=self.context, instruction=prompt, input=self.iinput)
-        prompt = self.prompter.generate_prompt(data_point,
-                                               chat_conversation=self.chat_conversation,
-                                               user_prompt_for_fake_system_prompt=self.user_prompt_for_fake_system_prompt,
-                                               )
+        prompt, gen_server_kwargs, stop = self.prep_prompt(prompt, stop, kwargs)
 
         gen_text = await super()._acall(prompt, stop=stop, run_manager=run_manager, **kwargs)
 
@@ -1624,9 +1625,7 @@ class H2OHuggingFaceTextGenInference(AGenerateStreamFirst, H2Oagenerate, Hugging
         for stop_seq in stop:
             if stop_seq in gen_text:
                 gen_text = gen_text[:gen_text.index(stop_seq)]
-        text = prompt + gen_text
-        text = self.prompter.get_response(text, prompt=prompt,
-                                          sanitize_bot_response=self.sanitize_bot_response)
+        text = gen_text
         if self.verbose:
             print("acall done", flush=True)
         return text
@@ -1641,6 +1640,7 @@ from langchain_community.chat_models import ChatOpenAI, AzureChatOpenAI
 from langchain_community.chat_models import ChatAnthropic as ChatAnthropic2
 from langchain_anthropic import ChatAnthropic as ChatAnthropic3
 from langchain_community.llms import OpenAI, AzureOpenAI, Replicate
+from langchain_together import ChatTogether
 
 
 class H2OTextGenOpenAI:
@@ -1705,6 +1705,8 @@ class H2OTextGenOpenAI:
 
         llm_output = {"token_usage": token_usage, "model_name": self.model_name}
         self.count_output_tokens += token_usage.get('completion_tokens', 0)
+        if self.count_output_tokens == 0:
+            self.count_output_tokens += sum([self.get_num_tokens(x[0].text) for x in generations if len(x) > 0])
         return LLMResult(generations=generations, llm_output=llm_output)
 
     def _generate(
@@ -2149,7 +2151,7 @@ class GenerateStream2:
         # prompt_messages = [p.to_messages() for p in prompts]
         if self.stream_output:
             kwargs.update(dict(stream=True))
-        if self.response_format:
+        if self.response_format == 'json_object':
             kwargs.update(dict(response_format=self.response_format))
         try:
             return self.generate(prompt_messages, stop=stop, callbacks=callbacks, **kwargs)
@@ -2174,7 +2176,7 @@ class GenerateStream2:
         # prompt_messages = [p.to_messages() for p in prompts]
         if self.stream_output:
             kwargs.update(dict(stream=True))
-        if self.response_format:
+        if self.response_format == 'json_object':
             kwargs.update(dict(response_format=self.response_format))
         try:
             return await self.agenerate(
@@ -2422,6 +2424,7 @@ def get_llm(use_openai_model=False,
             json_object_prompt=None,
             json_object_prompt_simpler=None,
             json_code_prompt=None,
+            json_code_prompt_if_no_schema=None,
             json_schema_instruction=None,
 
             system_prompt='',
@@ -2453,6 +2456,7 @@ def get_llm(use_openai_model=False,
             guided_regex=None,
             guided_choice=None,
             guided_grammar=None,
+            guided_whitespace_pattern=None,
 
             doing_grounding=False,
             json_vllm=False,
@@ -2603,15 +2607,20 @@ def get_llm(use_openai_model=False,
 
         kwargs_extra = {}
 
-        vllm_extra_dict = get_vllm_extra_dict(tokenizer,
-                                              stop_sequences=prompter.stop_sequences if prompter else [],
-                                              # repetition_penalty=repetition_penalty,  # could pass
-                                              response_format=response_format if guided_json else 'text',
-                                              guided_json=guided_json,
-                                              guided_regex=guided_regex,
-                                              guided_choice=guided_choice,
-                                              guided_grammar=guided_grammar,
-                                              )
+        if json_vllm:
+            response_format_real = response_format if guided_json and response_format == 'json_object' else 'text'
+            vllm_extra_dict = get_vllm_extra_dict(tokenizer,
+                                                  stop_sequences=prompter.stop_sequences if prompter else [],
+                                                  # repetition_penalty=repetition_penalty,  # could pass
+                                                  response_format=response_format_real,
+                                                  guided_json=guided_json,
+                                                  guided_regex=guided_regex,
+                                                  guided_choice=guided_choice,
+                                                  guided_grammar=guided_grammar,
+                                                  guided_whitespace_pattern=guided_whitespace_pattern,
+                                                  )
+        else:
+            vllm_extra_dict = {}
 
         if inf_type == 'openai_chat' or inf_type == 'vllm_chat':
             kwargs_extra.update(dict(system_prompt=system_prompt,
@@ -2636,12 +2645,14 @@ def get_llm(use_openai_model=False,
                 model_kwargs.update(vllm_extra_dict)
             else:
                 if is_json_model(model_name, inference_server) and response_format == 'json_object':
+                    # Not vllm, guided_json not required
                     kwargs_extra.update(dict(response_format=dict(type=response_format)))
         elif inf_type == 'openai_azure_chat':
             cls = H2OAzureChatOpenAI
             if 'response_format' not in azure_kwargs and \
                     response_format == 'json_object' and \
                     is_json_model(model_name, inference_server):
+                # NOTE: not vllm, guided_json not required for json_object
                 # overrides doc_json_mode if set
                 azure_kwargs.update(dict(response_format=dict(type=response_format)))
             kwargs_extra.update(
@@ -2828,6 +2839,7 @@ def get_llm(use_openai_model=False,
             # https://docs.mistral.ai/platform/client/#json-mode
             # odd outputs for mistral-medium and mistral-tiny as of 04/02/2024
             # As if still since Feb 26, 2024 no updates for other models despite the bottom of https://mistral.ai/news/mistral-large/
+            # Not vllm, guided_json not required
             kwargs_extra.update(dict(response_format=dict(type=response_format)))
 
         llm = cls(model=model_name,
@@ -2920,11 +2932,6 @@ def get_llm(use_openai_model=False,
         assert inference_server.startswith(
             'http'), "Malformed inference_server=%s.  Did you add http:// in front?" % inference_server
 
-        if is_gradio_vision_model(model_name):
-            img_file = get_image_file(image_file, image_control, document_choice)
-        else:
-            img_file = None
-
         from gradio_client import Client
         from gradio_utils.grclient import GradioClient
         from text_generation import Client as HFClient
@@ -2940,11 +2947,9 @@ def get_llm(use_openai_model=False,
             gr_client = None
             hf_client = model
             assert isinstance(hf_client, HFClient)
-            img_file = None
         else:
             gr_client = None
             hf_client = None
-            img_file = None
 
         if regenerate_gradio_clients and gr_client:
             # regenerate or leave None for llava so created inside
@@ -2961,8 +2966,25 @@ def get_llm(use_openai_model=False,
 
         llava_direct_gradio = gr_client is not None and '/textbox_api_submit' in [x.api_name for x in
                                                                                   gr_client.endpoints]
+        gradio_llava = is_gradio_vision_model(model_name) and llava_direct_gradio
 
-        if is_gradio_vision_model(model_name) and llava_direct_gradio:
+        if is_vision_model(model_name):
+            # HF client uses markdown image url with bytes inside (or real url inside)
+            if hf_client:
+                convert = True
+                str_bytes = False
+            elif gradio_llava:
+                convert = False
+                str_bytes = True
+            else:
+                convert = True
+                str_bytes = True
+            # Gradio uses str_bytes=True
+            img_file = get_image_file(image_file, image_control, document_choice, convert=convert, str_bytes=str_bytes)
+        else:
+            img_file = None
+
+        if gradio_llava:
             llm = GradioLLaVaInference(
                 inference_server_url=inference_server,
 
@@ -3004,9 +3026,6 @@ def get_llm(use_openai_model=False,
                 image_file=img_file,  # we pass file name itself
             )
         elif gr_client:
-            # ensure image in correct format
-            img_file = get_image_file(image_file, image_control, document_choice, convert=True)
-
             chat_client = False
             from src.vision.utils_vision import img_to_base64
             llm = GradioInference(
@@ -3042,6 +3061,7 @@ def get_llm(use_openai_model=False,
                 json_object_prompt=json_object_prompt,
                 json_object_prompt_simpler=json_object_prompt_simpler,
                 json_code_prompt=json_code_prompt,
+                json_code_prompt_if_no_schema=json_code_prompt_if_no_schema,
                 json_schema_instruction=json_schema_instruction,
 
                 system_prompt=system_prompt,
@@ -3063,6 +3083,7 @@ def get_llm(use_openai_model=False,
                 guided_regex=guided_regex,
                 guided_choice=guided_choice,
                 guided_grammar=guided_grammar,
+                guided_whitespace_pattern=guided_whitespace_pattern,
 
                 doing_grounding=doing_grounding,
             )
@@ -3094,6 +3115,10 @@ def get_llm(use_openai_model=False,
                 sanitize_bot_response=sanitize_bot_response,
                 async_sem=async_sem,
                 verbose=verbose,
+
+                base_model=model_name,
+                image_file=img_file,
+                image_control=None,  # already stuffed into image_file
             )
         else:
             raise RuntimeError("No defined client")
@@ -3177,6 +3202,13 @@ def get_llm(use_openai_model=False,
                       user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt,
                       )
     else:
+        if is_vision_model(model_name):
+            convert = True
+            str_bytes = False
+            img_file = get_image_file(image_file, image_control, document_choice, convert=convert, str_bytes=str_bytes)
+        else:
+            img_file = None
+
         async_output = False  # FIXME: not implemented yet
         if model is None:
             # only used if didn't pass model in
@@ -3249,11 +3281,16 @@ def get_llm(use_openai_model=False,
                                          base_model=model_name,
                                          verbose=verbose,
                                          truncation_generation=truncation_generation,
+                                         image_file=img_file,
+                                         image_control=image_control,
                                          **gen_kwargs)
         # pipe.task = "text-generation"
         # below makes it listen only to our prompt removal,
         # not built in prompt removal that is less general and not specific for our model
         # also works for Conditional generation: https://github.com/huggingface/transformers/issues/27870#issuecomment-1844775749
+        #if img_file:
+        #    pipe.task = 'image-to-text'
+        #else:
         pipe.task = "text2text-generation"
 
         llm = H2OHuggingFacePipeline(pipeline=pipe)
@@ -3566,6 +3603,191 @@ class Crawler:
         return self.final_urls
 
 
+def get_youtube_urls():
+    # https://www.netify.ai/resources/applications/youtube
+    base = ['googlevideo.com',
+            'video.google.com',
+            'video.l.google.com',
+            'wide-youtube.l.google.com',
+            'youtu.be',
+            'youtube.ae',
+            'youtube.al',
+            'youtube.am',
+            'youtube.at',
+            'youtube.az',
+            'youtube.ba',
+            'youtube.be',
+            'youtube.bg',
+            'youtube.bh',
+            'youtube.bo',
+            'youtube.by',
+            'youtube.ca',
+            'youtube.cat',
+            'youtube.ch',
+            'youtube.cl',
+            'youtube.co',
+            'youtube.co.ae',
+            'youtube.co.at',
+            'youtube.co.cr',
+            'youtube.co.hu',
+            'youtube.co.id',
+            'youtube.co.il',
+            'youtube.co.in',
+            'youtube.co.jp',
+            'youtube.co.ke',
+            'youtube.co.kr',
+            'youtube.com',
+            'youtube.co.ma',
+            'youtube.com.ar',
+            'youtube.com.au',
+            'youtube.com.az',
+            'youtube.com.bd',
+            'youtube.com.bh',
+            'youtube.com.bo',
+            'youtube.com.br',
+            'youtube.com.by',
+            'youtube.com.co',
+            'youtube.com.do',
+            'youtube.com.ec',
+            'youtube.com.ee',
+            'youtube.com.eg',
+            'youtube.com.es',
+            'youtube.com.gh',
+            'youtube.com.gr',
+            'youtube.com.gt',
+            'youtube.com.hk',
+            'youtube.com.hn',
+            'youtube.com.hr',
+            'youtube.com.jm',
+            'youtube.com.jo',
+            'youtube.com.kw',
+            'youtube.com.lb',
+            'youtube.com.lv',
+            'youtube.com.ly',
+            'youtube.com.mk',
+            'youtube.com.mt',
+            'youtube.com.mx',
+            'youtube.com.my',
+            'youtube.com.ng',
+            'youtube.com.ni',
+            'youtube.com.om',
+            'youtube.com.pa',
+            'youtube.com.pe',
+            'youtube.com.ph',
+            'youtube.com.pk',
+            'youtube.com.pt',
+            'youtube.com.py',
+            'youtube.com.qa',
+            'youtube.com.ro',
+            'youtube.com.sa',
+            'youtube.com.sg',
+            'youtube.com.sv',
+            'youtube.com.tn',
+            'youtube.com.tr',
+            'youtube.com.tw',
+            'youtube.com.ua',
+            'youtube.com.uy',
+            'youtube.com.ve',
+            'youtube.co.nz',
+            'youtube.co.th',
+            'youtube.co.tz',
+            'youtube.co.ug',
+            'youtube.co.uk',
+            'youtube.co.ve',
+            'youtube.co.za',
+            'youtube.co.zw',
+            'youtube.cr',
+            'youtube.cz',
+            'youtube.de',
+            'youtube.dk',
+            'youtubeeducation.com',
+            'youtube.ee',
+            'youtubeembeddedplayer.googleapis.com',
+            'youtube.es',
+            'youtube.fi',
+            'youtube.fr',
+            'youtube.ge',
+            'youtube.googleapis.com',
+            'youtube.gr',
+            'youtube.gt',
+            'youtube.hk',
+            'youtube.hr',
+            'youtube.hu',
+            'youtube.ie',
+            'youtubei.googleapis.com',
+            'youtube.in',
+            'youtube.iq',
+            'youtube.is',
+            'youtube.it',
+            'youtube.jo',
+            'youtube.jp',
+            'youtubekids.com',
+            'youtube.kr',
+            'youtube.kz',
+            'youtube.la',
+            'youtube.lk',
+            'youtube.lt',
+            'youtube.lu',
+            'youtube.lv',
+            'youtube.ly',
+            'youtube.ma',
+            'youtube.md',
+            'youtube.me',
+            'youtube.mk',
+            'youtube.mn',
+            'youtube.mx',
+            'youtube.my',
+            'youtube.ng',
+            'youtube.ni',
+            'youtube.nl',
+            'youtube.no',
+            'youtube-nocookie.com',
+            'youtube.pa',
+            'youtube.pe',
+            'youtube.ph',
+            'youtube.pk',
+            'youtube.pl',
+            'youtube.pr',
+            'youtube.pt',
+            'youtube.qa',
+            'youtube.ro',
+            'youtube.rs',
+            'youtube.ru',
+            'youtube.sa',
+            'youtube.se',
+            'youtube.sg',
+            'youtube.si',
+            'youtube.sk',
+            'youtube.sn',
+            'youtube.soy',
+            'youtube.sv',
+            'youtube.tn',
+            'youtube.tv',
+            'youtube.ua',
+            'youtube.ug',
+            'youtube-ui.l.google.com',
+            'youtube.uy',
+            'youtube.vn',
+            'yt3.ggpht.com',
+            'yt.be',
+            'ytimg.com',
+            'ytimg.l.google.com',
+            'ytkids.app.goo.gl',
+            'yt-video-upload.l.google.com']
+
+    url_prefixes_youtube1 = []
+    for x in base:
+         url_prefixes_youtube1.extend([
+            # '%s/watch?v=' % x,
+            '%s' % x,
+            # '%s/shorts/' % x,
+        ])
+    return set(url_prefixes_youtube1)
+
+
+url_prefixes_youtube = get_youtube_urls()
+
+
 def file_to_doc(file,
                 filei=0,
                 base_path=None, verbose=False, fail_any_exception=False,
@@ -3613,6 +3835,9 @@ def file_to_doc(file,
 
                 is_public=False,
                 from_ui=True,
+
+                hf_embedding_model=None,
+                use_openai_embedding=False,
                 ):
     # SOME AUTODETECTION LOGIC FOR URL VS TEXT
 
@@ -3625,25 +3850,9 @@ def file_to_doc(file,
     case3_arxiv = file_lower.startswith('http://arxiv.org/abs') and len(file_lower.split('http://arxiv.org/abs')) == 2
     case4_arxiv = file_lower.startswith('arxiv.org/abs/') and len(file_lower.split('arxiv.org/abs/')) == 2
 
-    url_prefixes_youtube = [
-        'https://www.youtube.com/watch?v=',
-        'http://www.youtube.com/watch?v=',
-        'www.youtube.com/watch?v=',
-        'youtube.com/watch?v=',
-        'https://youtube.com/watch?v=',
-        'http://youtube.com/watch?v=',
-
-        'https://www.youtube.com/shorts/',
-        'http://www.youtube.com/shorts/',
-        'https://youtube.com/shorts/',
-        'http://youtube.com/shorts/',
-        'www.youtube.com/shorts/',
-        'youtube.com/shorts/'
-    ]
 
     is_arxiv = case1_arxiv or case2_arxiv or case3_arxiv or case4_arxiv
-    is_youtube = any(
-        file_lower.startswith(prefix) and len(file_lower.split(prefix)) == 2 for prefix in url_prefixes_youtube)
+    is_youtube = any(file_lower.replace('http://', '').replace('https://', '').replace('www.', '').startswith(prefix) for prefix in url_prefixes_youtube)
 
     if is_url and is_txt:
         # decide which
@@ -3669,7 +3878,9 @@ def file_to_doc(file,
         set_audio_types1 = set_audio_types
 
     assert db_type is not None
-    chunk_sources = functools.partial(_chunk_sources, chunk=chunk, chunk_size=chunk_size, db_type=db_type)
+    chunk_sources = functools.partial(_chunk_sources, chunk=chunk, chunk_size=chunk_size, db_type=db_type,
+                                      hf_embedding_model=hf_embedding_model, use_openai_embedding=use_openai_embedding,
+                                      verbose=verbose)
     add_meta = functools.partial(_add_meta, headsize=headsize, filei=filei)
     # FIXME: if zip, file index order will not be correct if other files involved
     path_to_docs_func = functools.partial(path_to_docs,
@@ -3723,6 +3934,9 @@ def file_to_doc(file,
 
                                           is_public=is_public,
                                           from_ui=from_ui,
+
+                                          hf_embedding_model=hf_embedding_model,
+                                          use_openai_embedding=use_openai_embedding,
                                           )
 
     if file is None:
@@ -4619,6 +4833,9 @@ def path_to_doc1(file,
 
                  is_public=False,
                  from_ui=True,
+
+                 hf_embedding_model=None,
+                 use_openai_embedding=False,
                  ):
     assert db_type is not None
     if verbose:
@@ -4681,6 +4898,9 @@ def path_to_doc1(file,
                           selected_file_types=selected_file_types,
                           is_public=is_public,
                           from_ui=from_ui,
+
+                          hf_embedding_model=hf_embedding_model,
+                          use_openai_embedding=use_openai_embedding,
                           )
     except BaseException as e:
         print("Failed to ingest %s due to %s" % (file, traceback.format_exc()))
@@ -4764,6 +4984,9 @@ def path_to_docs(path_or_paths,
                  selected_file_types=None,
 
                  from_ui=True,
+
+                 use_openai_embedding=False,
+                 hf_embedding_model=None,
                  ):
     if verbose:
         print("BEGIN Consuming path_or_paths=%s url=%s text=%s" % (path_or_paths, url, text), flush=True)
@@ -4906,6 +5129,9 @@ def path_to_docs(path_or_paths,
 
                   is_public=is_public,
                   from_ui=from_ui,
+
+                  hf_embedding_model=hf_embedding_model,
+                  use_openai_embedding=use_openai_embedding,
                   )
 
     if is_public:
@@ -4923,6 +5149,7 @@ def path_to_docs(path_or_paths,
     filei0 = filei
 
     if n_jobs != 1 and len(globs_non_image_types) > 1:
+        kwargs['hf_embedding_model'] = None  # can't fork and use CUDA
         # avoid nesting, e.g. upload 1 zip and then inside many files
         # harder to handle if upload many zips with many files, inner parallel one will be disabled by joblib
         documents = ProgressParallel(n_jobs=n_jobs, verbose=10 if verbose else 0, backend='multiprocessing')(
@@ -4980,7 +5207,6 @@ def prep_langchain(persist_directory,
                    langchain_mode, langchain_mode_paths, langchain_mode_types,
                    hf_embedding_model,
                    migrate_embedding_model,
-                   auto_migrate_db,
                    n_jobs=-1, embedding_gpu_id=0,
                    kwargs_make_db={},
                    verbose=False):
@@ -5005,7 +5231,7 @@ def prep_langchain(persist_directory,
             get_existing_db(None, persist_directory, load_db_if_exists,
                             db_type, use_openai_embedding,
                             langchain_mode, langchain_mode_paths, langchain_mode_types,
-                            hf_embedding_model, migrate_embedding_model, auto_migrate_db,
+                            hf_embedding_model, migrate_embedding_model,
                             n_jobs=n_jobs, embedding_gpu_id=embedding_gpu_id)
     else:
         if db_dir_exists and user_path is not None:
@@ -5068,7 +5294,7 @@ def get_hf_embedding_model_name(hf_embedding_model):
 def check_update_chroma_embedding(db,
                                   db_type,
                                   use_openai_embedding,
-                                  hf_embedding_model, migrate_embedding_model, auto_migrate_db,
+                                  hf_embedding_model, migrate_embedding_model,
                                   langchain_mode, langchain_mode_paths, langchain_mode_types,
                                   n_jobs=-1,
                                   verbose=False):
@@ -5099,7 +5325,6 @@ def check_update_chroma_embedding(db,
                     collection_name=None,
                     hf_embedding_model=hf_embedding_model,
                     migrate_embedding_model=migrate_embedding_model,
-                    auto_migrate_db=auto_migrate_db,
                     n_jobs=n_jobs,
                     verbose=verbose,
                     )
@@ -5150,7 +5375,6 @@ def get_existing_db(db, persist_directory,
                     langchain_mode, langchain_mode_paths, langchain_mode_types,
                     hf_embedding_model,
                     migrate_embedding_model,
-                    auto_migrate_db=False,
                     verbose=False, check_embedding=True, migrate_meta=True,
                     n_jobs=-1,
                     embedding_gpu_id=0):
@@ -5158,28 +5382,14 @@ def get_existing_db(db, persist_directory,
         if os.path.isfile(os.path.join(persist_directory, 'chroma.sqlite3')):
             must_migrate = False
         elif os.path.isdir(os.path.join(persist_directory, 'index')):
-            must_migrate = True
+            raise RuntimeError("Migration no longer supported")
         else:
             return db, use_openai_embedding, hf_embedding_model
         chroma_settings = dict(is_persistent=True)
         use_chromamigdb = False
         if must_migrate:
-            if auto_migrate_db:
-                print("Detected chromadb<0.4 database, require migration, doing now....", flush=True)
-                from chroma_migrate.import_duckdb import migrate_from_duckdb
-                import chromadb
-                api = chromadb.PersistentClient(path=persist_directory)
-                did_migration = migrate_from_duckdb(api, persist_directory)
-                assert did_migration, "Failed to migrate chroma collection at %s, see https://docs.trychroma.com/migration for CLI tool" % persist_directory
-            elif have_chromamigdb:
-                print(
-                    "Detected chroma<0.4 database but --auto_migrate_db=False, but detected chromamigdb package, so using old database that still requires duckdb",
-                    flush=True)
-                chroma_settings = dict(chroma_db_impl="duckdb+parquet")
-                use_chromamigdb = True
-            else:
-                raise ValueError(
-                    "Detected chromadb<0.4 database, require migration, but did not detect chromamigdb package or did not choose auto_migrate_db=False (see FAQ.md)")
+            raise ValueError(
+                "Detected chromadb<0.4 database, not supported")
 
         if db is None:
             if verbose:
@@ -5203,9 +5413,7 @@ def get_existing_db(db, persist_directory,
             import logging
             logging.getLogger("chromadb").setLevel(logging.ERROR)
             if use_chromamigdb:
-                from chromamigdb.config import Settings
-                chroma_class = ChromaMig
-                api_kwargs = {}
+                raise RuntimeError("Migration no longer supported")
             else:
                 from chromadb.config import Settings
                 chroma_class = Chroma
@@ -5258,7 +5466,6 @@ def get_existing_db(db, persist_directory,
                                                                  use_openai_embedding,
                                                                  hf_embedding_model,
                                                                  migrate_embedding_model,
-                                                                 auto_migrate_db,
                                                                  langchain_mode,
                                                                  langchain_mode_paths,
                                                                  langchain_mode_types,
@@ -5476,7 +5683,6 @@ def check_persist_directory(persist_directory):
 def _make_db(use_openai_embedding=False,
              hf_embedding_model=None,
              migrate_embedding_model=False,
-             auto_migrate_db=False,
              first_para=False, text_limit=None,
              chunk=True, chunk_size=512,
 
@@ -5534,14 +5740,16 @@ def _make_db(use_openai_embedding=False,
         get_existing_db(db, persist_directory, load_db_if_exists, db_type,
                         use_openai_embedding,
                         langchain_mode, langchain_mode_paths, langchain_mode_types,
-                        hf_embedding_model, migrate_embedding_model, auto_migrate_db, verbose=verbose,
+                        hf_embedding_model, migrate_embedding_model, verbose=verbose,
                         n_jobs=n_jobs)
     if db_trial is not None:
         db = db_trial
 
     sources = []
-    if not db:
-        chunk_sources = functools.partial(_chunk_sources, chunk=chunk, chunk_size=chunk_size, db_type=db_type)
+    if db is None:
+        chunk_sources = functools.partial(_chunk_sources, chunk=chunk, chunk_size=chunk_size, db_type=db_type,
+                                          hf_embedding_model=hf_embedding_model,
+                                          use_openai_embedding=use_openai_embedding, verbose=verbose)
         if langchain_mode in ['wiki_full']:
             from read_wiki_full import get_all_documents
             small_test = None
@@ -5623,6 +5831,9 @@ def _make_db(use_openai_embedding=False,
 
                                 is_public=False,
                                 from_ui=True,
+
+                                hf_embedding_model=hf_embedding_model,
+                                use_openai_embedding=use_openai_embedding,
                                 )
         new_metadata_sources = set([x.metadata['source'] for x in sources1])
         if new_metadata_sources:
@@ -5653,7 +5864,7 @@ def _make_db(use_openai_embedding=False,
                 print("Generating db", flush=True)
             else:
                 print("Adding to db", flush=True)
-    if not db:
+    if db is None:
         if sources:
             db = get_db(sources, use_openai_embedding=use_openai_embedding, db_type=db_type,
                         persist_directory=persist_directory,
@@ -5662,7 +5873,6 @@ def _make_db(use_openai_embedding=False,
                         langchain_mode_types=langchain_mode_types,
                         hf_embedding_model=hf_embedding_model,
                         migrate_embedding_model=migrate_embedding_model,
-                        auto_migrate_db=auto_migrate_db,
                         n_jobs=n_jobs,
                         verbose=verbose)
             if verbose:
@@ -5684,17 +5894,14 @@ def _make_db(use_openai_embedding=False,
 
 
 def is_chroma_db(db):
-    return isinstance(db, Chroma) or isinstance(db, ChromaMig) or ChromaMig.__name__ in str(db)
+    return isinstance(db, Chroma)
 
 
 def is_new_chroma_db(db):
     if isinstance(db, Chroma):
         return True
-    if isinstance(db, ChromaMig) or ChromaMig.__name__ in str(db):
-        return False
-    if os.getenv('HARD_ASSERTS'):
-        raise RuntimeError("Shouldn't reach here, unknown db: %s" % str(db))
-    return False
+    else:
+        raise RuntimeError("Migration no longer supported")
 
 
 def sim_search(db, query='', k=1000, with_score=False, filter_kwargs=None, chunk_id_filter=None,
@@ -5828,7 +6035,7 @@ def _get_documents(db):
     if isinstance(db, FAISS):
         documents = [v for k, v in db.docstore._dict.items()]
         documents = dict(documents=documents, metadatas=[{}] * len(documents), ids=[0] * len(documents))
-    elif isinstance(db, Chroma) or isinstance(db, ChromaMig) or ChromaMig.__name__ in str(db):
+    elif isinstance(db, Chroma):
         documents = db.get()
         if documents is None:
             documents = dict(documents=[], metadatas=[], ids=[])
@@ -5876,7 +6083,7 @@ def _get_docs_and_meta(db, top_k_docs, filter_kwargs={}, text_context_list=None,
         db_metadatas += [x.metadata if hasattr(x, 'metadata') else {} for x in text_context_list]
 
     from langchain_community.vectorstores import FAISS
-    if isinstance(db, Chroma) or isinstance(db, ChromaMig) or ChromaMig.__name__ in str(db):
+    if isinstance(db, Chroma):
         if top_k_docs == -1:
             limit = k_max
         else:
@@ -5942,6 +6149,7 @@ def run_qa_db(**kwargs):
     kwargs['guided_regex'] = kwargs.get('guided_regex', '')
     kwargs['guided_choice'] = kwargs.get('guided_choice', '')
     kwargs['guided_grammar'] = kwargs.get('guided_grammar', '')
+    kwargs['guided_whitespace_pattern'] = kwargs.get('guided_whitespace_pattern', None)
     kwargs['json_vllm'] = kwargs.get('json_vllm', False)
 
     kwargs['from_ui'] = kwargs.get('from_ui', True)
@@ -6009,7 +6217,6 @@ def _run_qa_db(query=None,
                load_awq='',
                hf_embedding_model=None,
                migrate_embedding_model=False,
-               auto_migrate_db=False,
                stream_output0=False,
                stream_output=False,
                async_output=True,
@@ -6077,6 +6284,7 @@ def _run_qa_db(query=None,
                json_object_prompt=None,
                json_object_prompt_simpler=None,
                json_code_prompt=None,
+               json_code_prompt_if_no_schema=None,
                json_schema_instruction=None,
 
                visible_models=None,
@@ -6113,6 +6321,7 @@ def _run_qa_db(query=None,
                guided_regex=None,
                guided_choice=None,
                guided_grammar=None,
+               guided_whitespace_pattern=None,
 
                json_vllm=False,
 
@@ -6290,6 +6499,7 @@ Respond to prompt of Final Answer with your final well-structured%s answer to th
                       json_object_prompt=json_object_prompt,
                       json_object_prompt_simpler=json_object_prompt_simpler,
                       json_code_prompt=json_code_prompt,
+                      json_code_prompt_if_no_schema=json_code_prompt_if_no_schema,
                       json_schema_instruction=json_schema_instruction,
 
                       system_prompt=system_prompt,
@@ -6320,6 +6530,7 @@ Respond to prompt of Final Answer with your final well-structured%s answer to th
                       guided_regex=guided_regex,
                       guided_choice=guided_choice,
                       guided_grammar=guided_grammar,
+                      guided_whitespace_pattern=guided_whitespace_pattern,
 
                       doing_grounding=doing_grounding,
                       json_vllm=json_vllm,
@@ -6803,110 +7014,6 @@ def _get_docs_with_score(query, k_db,
     return docs_with_score
 
 
-def select_docs_with_score(docs_with_score, top_k_docs, one_doc_size):
-    if top_k_docs > 0:
-        docs_with_score = docs_with_score[:top_k_docs]
-    elif one_doc_size is not None:
-        docs_with_score = [(docs_with_score[0][:one_doc_size], docs_with_score[0][1])]
-    else:
-        # do nothing
-        pass
-    return docs_with_score
-
-
-class H2OCharacterTextSplitter(RecursiveCharacterTextSplitter):
-    @classmethod
-    def from_huggingface_tokenizer(cls, tokenizer: Any, **kwargs: Any) -> TextSplitter:
-        def _huggingface_tokenizer_length(text: str) -> int:
-            return get_token_count(text, tokenizer)
-
-        return cls(length_function=_huggingface_tokenizer_length, **kwargs)
-
-
-def split_merge_docs(docs_with_score, tokenizer=None, max_input_tokens=None, docs_token_handling=None,
-                     joiner=docs_joiner_default,
-                     non_doc_prompt='',
-                     do_split=True,
-                     verbose=False):
-    # NOTE: Could use joiner=\n\n, but if PDF and continues, might want just  full continue with joiner=''
-    # NOTE: assume max_input_tokens already processed if was -1 and accounts for model_max_len and is per-llm call
-    if max_input_tokens is not None:
-        max_input_tokens -= get_token_count(non_doc_prompt, tokenizer)
-
-    if docs_token_handling in ['chunk']:
-        return docs_with_score, 0
-    elif docs_token_handling in [None, 'split_or_merge']:
-        assert tokenizer
-        tokens_before_split = [get_token_count(x + joiner, tokenizer) for x in
-                               [x[0].page_content for x in docs_with_score]]
-        # skip split if not necessary, since expensive for some reason
-        do_split &= any([x > max_input_tokens for x in tokens_before_split])
-        if do_split:
-
-            if verbose:
-                print('tokens_before_split=%s' % tokens_before_split, flush=True)
-
-            # see if need to split
-            # account for joiner tokens
-            joiner_tokens = get_token_count(joiner, tokenizer)
-            doc_chunk_size = max(64, min(max_input_tokens,
-                                         max(64, max_input_tokens - joiner_tokens * len(docs_with_score))))
-            text_splitter = H2OCharacterTextSplitter.from_huggingface_tokenizer(
-                tokenizer, chunk_size=doc_chunk_size, chunk_overlap=0
-            )
-            [x[0].metadata.update(dict(docscore=x[1], doci=doci, ntokens=tokens_before_split[doci])) for doci, x in
-             enumerate(docs_with_score)]
-            docs = [x[0] for x in docs_with_score]
-            # only split those that need to be split, else recursive splitter goes too nuts and takes too long
-            docs_to_split = [x for x in docs if x.metadata['ntokens'] > doc_chunk_size]
-            docs_to_not_split = [x for x in docs if x.metadata['ntokens'] <= doc_chunk_size]
-            docs_split_new = flatten_list([text_splitter.split_documents([x]) for x in docs_to_split])
-            docs_new = docs_to_not_split + docs_split_new
-            doci_new = [x.metadata['doci'] for x in docs_new]
-            # order back by doci
-            docs_new = [x for _, x in sorted(zip(doci_new, docs_new), key=lambda pair: pair[0])]
-            docs_with_score = [(x, x.metadata['docscore']) for x in docs_new]
-
-            tokens_after_split = [get_token_count(x + joiner, tokenizer) for x in
-                                  [x[0].page_content for x in docs_with_score]]
-            if verbose:
-                print('tokens_after_split=%s' % tokens_after_split, flush=True)
-
-        docs_with_score_new = []
-        k = 0
-        while k < len(docs_with_score):
-            # means use max_input_tokens to ensure model gets no more than max_input_tokens each map
-            top_k_docs, one_doc_size, num_doc_tokens = \
-                get_docs_tokens(tokenizer,
-                                text_context_list=[x[0].page_content for x in docs_with_score[k:]],
-                                max_input_tokens=max_input_tokens)
-            docs_with_score1 = select_docs_with_score(docs_with_score[k:], top_k_docs, one_doc_size)
-            new_score = docs_with_score1[0][1]
-            new_page_content = joiner.join([x[0].page_content for x in docs_with_score1])
-            new_metadata = docs_with_score1[0][0].metadata.copy()
-            new_metadata['source'] = joiner.join(set([x[0].metadata['source'] for x in docs_with_score1]))
-            doc1 = Document(page_content=new_page_content, metadata=new_metadata)
-            docs_with_score_new.append((doc1, new_score))
-
-            if do_split:
-                assert one_doc_size is None, "Split failed: %s" % one_doc_size
-            elif one_doc_size is not None:
-                # chopped
-                assert top_k_docs == 1
-            assert top_k_docs >= 1
-            k += top_k_docs
-
-        tokens_after_merge = [get_token_count(x + joiner, tokenizer) for x in
-                              [x[0].page_content for x in docs_with_score_new]]
-        if verbose:
-            print('tokens_after_merge=%s' % tokens_after_merge, flush=True)
-
-        max_tokens_after_merge = max(tokens_after_merge) if tokens_after_merge else 0
-        return docs_with_score_new, max_tokens_after_merge
-    else:
-        raise ValueError("No such docs_token_handling=%s" % docs_token_handling)
-
-
 def get_single_document(document_choice, db, extension=None):
     if isinstance(document_choice, str):
         document_choice = [document_choice]
@@ -7120,7 +7227,6 @@ def get_chain(query=None,
               langchain_only_model=False,
               hf_embedding_model=None,
               migrate_embedding_model=False,
-              auto_migrate_db=False,
               prompter=None,
               prompt_type=None,
               prompt_dict=None,
@@ -7612,7 +7718,6 @@ def get_chain(query=None,
     db, num_new_sources, new_sources_metadata = make_db(use_openai_embedding=use_openai_embedding,
                                                         hf_embedding_model=hf_embedding_model,
                                                         migrate_embedding_model=migrate_embedding_model,
-                                                        auto_migrate_db=auto_migrate_db,
                                                         first_para=first_para, text_limit=text_limit,
                                                         chunk=chunk, chunk_size=chunk_size,
 
@@ -7825,8 +7930,6 @@ def get_chain(query=None,
                                                            text_context_list=text_context_list,
                                                            chunk_id_filter=chunk_id_filter)
 
-        if top_k_docs == -1:
-            top_k_docs = len(db_documents)
         # similar to langchain's chroma's _results_to_docs_and_scores
         docs_with_score = [(Document(page_content=result[0], metadata=result[1] or {}), 0)
                            for result in zip(db_documents, db_metadatas)]
@@ -7859,7 +7962,8 @@ def get_chain(query=None,
                                     ]
         docs_with_score = docs_with_score2
 
-        docs_with_score = docs_with_score[:top_k_docs]
+        top_k_docs_sample = len(db_documents) if top_k_docs == -1 else top_k_docs
+        docs_with_score = docs_with_score[:top_k_docs_sample]
         docs = [x[0] for x in docs_with_score]
         scores = [x[1] for x in docs_with_score]
     else:
@@ -7982,21 +8086,22 @@ def get_chain(query=None,
                           system_prompt=system_prompt)
         if external_handle_chat_conversation or prompter.prompt_type in [template_prompt_type, unknown_prompt_type]:
             # should already have attribute, checking sanity
-            assert hasattr(llm, 'chat_conversation')
+            assert hasattr(llm, 'chat_conversation') or isinstance(llm, H2OHuggingFacePipeline)
             llm_kwargs.update(chat_conversation=history_to_use_final)
         llm, model_name, streamer, prompt_type_out, async_output, only_new_text, gradio_server = \
             get_llm(**llm_kwargs)
 
         # avoid craziness
+        top_k_docs_sample = len(docs_with_score) if top_k_docs == -1 else top_k_docs
         if 0 < top_k_docs_trial < max_chunks:
             # avoid craziness
             if top_k_docs == -1:
-                top_k_docs = top_k_docs_trial
+                top_k_docs_sample = top_k_docs_trial
             else:
-                top_k_docs = min(top_k_docs, top_k_docs_trial)
+                top_k_docs_sample = min(top_k_docs, top_k_docs_trial)
         elif top_k_docs_trial >= max_chunks:
-            top_k_docs = max_chunks
-        docs_with_score = select_docs_with_score(docs_with_score, top_k_docs, one_doc_size)
+            top_k_docs_sample = max_chunks
+        docs_with_score = select_docs_with_score(docs_with_score, top_k_docs_sample, one_doc_size)
     else:
         # don't reduce, except listen to top_k_docs and max_total_input_tokens
         one_doc_size = None
@@ -8030,13 +8135,13 @@ def get_chain(query=None,
                                            # nothing, just getting base amount for each call
                                            )
 
-        # group docs if desired/can to fill context to avoid multiple LLM calls or too large chunks
         docs_with_score, max_doc_tokens = split_merge_docs(docs_with_score,
                                                            tokenizer,
                                                            max_input_tokens=max_input_tokens,
                                                            docs_token_handling=docs_token_handling,
                                                            joiner=docs_joiner if not doing_grounding else "Document xx",
                                                            non_doc_prompt=estimated_full_prompt,
+                                                           hf_embedding_model=hf_embedding_model,
                                                            verbose=verbose)
         # in case docs_with_score grew due to splitting, limit again by top_k_docs
         if top_k_docs > 0:
@@ -8568,11 +8673,11 @@ def get_sources_answer(query, docs, answer,
                 answer_sources)
         if verbose or True:
             if t_run is not None and int(t_run) > 0:
-                sorted_sources_urls += 'Total Time: %d [s]<p>' % t_run
+                sorted_sources_urls += 'Total Time: %d [s]<br>' % t_run
             if count_input_tokens and count_output_tokens:
-                sorted_sources_urls += 'Input Tokens: %s | Output Tokens: %d<p>' % (
+                sorted_sources_urls += 'Input Tokens: %s | Output Tokens: %d<br>' % (
                     count_input_tokens, count_output_tokens)
-        sorted_sources_urls += "Total document chunks used: %s<p>" % len(docs)
+        sorted_sources_urls += "Total document chunks used: %s<br>" % len(docs)
         sorted_sources_urls += f"<font size=\"{font_size}\"></ul></p>{source_postfix}</font>"
         title_overall = "Sources"
         sorted_sources_urls = f"""<details><summary><font size="{font_size}">{title_overall}</font></summary><font size="{font_size}">{sorted_sources_urls}</font></details>"""
@@ -8601,7 +8706,7 @@ def get_any_db(db1s, langchain_mode, langchain_mode_paths, langchain_mode_types,
                dbs=None,
                load_db_if_exists=None, db_type=None,
                use_openai_embedding=None,
-               hf_embedding_model=None, migrate_embedding_model=None, auto_migrate_db=None,
+               hf_embedding_model=None, migrate_embedding_model=None,
                for_sources_list=False,
                verbose=False,
                n_jobs=-1,
@@ -8629,7 +8734,7 @@ def get_any_db(db1s, langchain_mode, langchain_mode_paths, langchain_mode_types,
             get_existing_db(db, persist_directory, load_db_if_exists, db_type,
                             use_openai_embedding,
                             langchain_mode, langchain_mode_paths, langchain_mode_types,
-                            hf_embedding_model, migrate_embedding_model, auto_migrate_db,
+                            hf_embedding_model, migrate_embedding_model,
                             verbose=verbose, n_jobs=n_jobs)
         if db is not None:
             # if found db, then stuff into state, so don't have to reload again that takes time
@@ -8652,7 +8757,6 @@ def get_sources(db1s, selection_docs_state1, requests_state1, langchain_mode,
                 use_openai_embedding=None,
                 hf_embedding_model=None,
                 migrate_embedding_model=None,
-                auto_migrate_db=None,
                 verbose=False,
                 get_userid_auth=None,
                 n_jobs=-1,
@@ -8682,7 +8786,6 @@ def get_sources(db1s, selection_docs_state1, requests_state1, langchain_mode,
                         use_openai_embedding=use_openai_embedding,
                         hf_embedding_model=hf_embedding_model,
                         migrate_embedding_model=migrate_embedding_model,
-                        auto_migrate_db=auto_migrate_db,
                         for_sources_list=True,
                         verbose=verbose,
                         n_jobs=n_jobs,
@@ -8815,7 +8918,6 @@ def _update_user_db(file,
                     use_openai_embedding=None,
                     hf_embedding_model=None,
                     migrate_embedding_model=None,
-                    auto_migrate_db=None,
                     verbose=None,
                     n_jobs=-1,
                     is_url=None, is_txt=None,
@@ -8833,7 +8935,6 @@ def _update_user_db(file,
     assert use_openai_embedding is not None
     assert hf_embedding_model is not None
     assert migrate_embedding_model is not None
-    assert auto_migrate_db is not None
     assert caption_loader is not None
     assert asr_loader is not None
     assert doctr_loader is not None
@@ -8982,6 +9083,9 @@ def _update_user_db(file,
 
                            is_public=is_public,
                            from_ui=from_ui,
+
+                           use_openai_embedding=use_openai_embedding,
+                           hf_embedding_model=hf_embedding_model,
                            )
     exceptions = [x for x in sources if x.metadata.get('exception')]
     exceptions_strs = [x.metadata['exception'] for x in exceptions]
@@ -9023,7 +9127,6 @@ def _update_user_db(file,
                             langchain_mode_types=langchain_mode_types,
                             hf_embedding_model=hf_embedding_model,
                             migrate_embedding_model=migrate_embedding_model,
-                            auto_migrate_db=auto_migrate_db,
                             n_jobs=n_jobs,
                             verbose=verbose)
             if db is not None:
@@ -9042,7 +9145,9 @@ def _update_user_db(file,
             persist_directory, langchain_type = get_persist_directory(langchain_mode, db1s=db1s, dbs=dbs,
                                                                       langchain_type=langchain_type)
             langchain_mode_types[langchain_mode] = langchain_type
-            if langchain_mode in dbs and dbs[langchain_mode] is not None:
+            if not persist_directory:
+                raise ValueError("Switch to valid Collection, not %s" % langchain_mode)
+            elif langchain_mode in dbs and dbs[langchain_mode] is not None:
                 # then add
                 db, num_new_sources, new_sources_metadata = add_to_db(dbs[langchain_mode], sources, db_type=db_type,
                                                                       use_openai_embedding=use_openai_embedding,
@@ -9058,7 +9163,6 @@ def _update_user_db(file,
                             langchain_mode_types=langchain_mode_types,
                             hf_embedding_model=hf_embedding_model,
                             migrate_embedding_model=migrate_embedding_model,
-                            auto_migrate_db=auto_migrate_db,
                             n_jobs=n_jobs,
                             verbose=verbose)
             dbs[langchain_mode] = db
@@ -9098,7 +9202,6 @@ def get_source_files_given_langchain_mode(db1s, selection_docs_state1, requests_
                                           use_openai_embedding=None,
                                           hf_embedding_model=None,
                                           migrate_embedding_model=None,
-                                          auto_migrate_db=None,
                                           verbose=False,
                                           get_userid_auth=None,
                                           delete_sources=False,
@@ -9116,7 +9219,6 @@ def get_source_files_given_langchain_mode(db1s, selection_docs_state1, requests_
                     use_openai_embedding=use_openai_embedding,
                     hf_embedding_model=hf_embedding_model,
                     migrate_embedding_model=migrate_embedding_model,
-                    auto_migrate_db=auto_migrate_db,
                     for_sources_list=True,
                     verbose=verbose,
                     n_jobs=n_jobs,
@@ -9274,7 +9376,6 @@ def update_and_get_source_files_given_langchain_mode(db1s,
                                                      hf_embedding_model=None,
                                                      use_openai_embedding=None,
                                                      migrate_embedding_model=None,
-                                                     auto_migrate_db=None,
                                                      text_limit=None,
                                                      db_type=None, load_db_if_exists=None,
                                                      n_jobs=None, verbose=None, get_userid_auth=None):
@@ -9284,7 +9385,6 @@ def update_and_get_source_files_given_langchain_mode(db1s,
     set_userid(db1s, requests_state, get_userid_auth)
     assert hf_embedding_model is not None
     assert migrate_embedding_model is not None
-    assert auto_migrate_db is not None
     langchain_mode_paths = selection_docs_state['langchain_mode_paths']
     langchain_mode_types = selection_docs_state['langchain_mode_types']
     has_path = {k: v for k, v in langchain_mode_paths.items() if v}
@@ -9301,7 +9401,6 @@ def update_and_get_source_files_given_langchain_mode(db1s,
                     use_openai_embedding=use_openai_embedding,
                     hf_embedding_model=hf_embedding_model,
                     migrate_embedding_model=migrate_embedding_model,
-                    auto_migrate_db=auto_migrate_db,
                     for_sources_list=True,
                     verbose=verbose,
                     n_jobs=n_jobs,
@@ -9313,7 +9412,6 @@ def update_and_get_source_files_given_langchain_mode(db1s,
     db, num_new_sources, new_sources_metadata = make_db(use_openai_embedding=False,
                                                         hf_embedding_model=hf_embedding_model,
                                                         migrate_embedding_model=migrate_embedding_model,
-                                                        auto_migrate_db=auto_migrate_db,
                                                         first_para=first_para, text_limit=text_limit,
                                                         chunk=chunk,
                                                         chunk_size=chunk_size,
@@ -9432,8 +9530,8 @@ def get_some_dbs_from_hf(dest='.', db_zips=None):
         assert os.path.isfile(path_to_zip_file), "Missing zip in %s" % path_to_zip_file
         if dir_expected:
             assert os.path.isdir(os.path.join(dest, dir_expected)), "Missing path for %s" % dir_expected
-            assert os.path.isdir(
-                os.path.join(dest, dir_expected, 'index')), "Missing index in %s" % dir_expected
+            assert os.path.isfile(
+                os.path.join(dest, dir_expected, 'chroma.sqlite3')), "Missing db in %s" % dir_expected
 
 
 def _create_local_weaviate_client():

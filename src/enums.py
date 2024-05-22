@@ -77,6 +77,7 @@ class PromptType(Enum):
     sealion = 69
     groq = 70
     aya = 71
+    idefics2 = 72
 
 
 class DocumentSubset(Enum):
@@ -167,7 +168,8 @@ class LangChainAgent(Enum):
 
 no_server_str = no_lora_str = no_model_str = '[]'
 
-# from site-packages/langchain/llms/openai.py
+# from:
+# /home/jon/miniconda3/envs/h2ogpt/lib/python3.10/site-packages/langchain_community/llms/openai.py
 # but needed since ChatOpenAI doesn't have this information
 gpt_token_mapping = {
     "gpt-4": 8192,
@@ -186,6 +188,9 @@ gpt_token_mapping = {
     "gpt-35-turbo-1106": 16385,  # 4096 output
     "gpt-4-vision-preview": 128000,  # 4096 output
     "gpt-4-1106-vision-preview": 128000,  # 4096 output
+    "gpt-4-turbo-2024-04-09": 128000,  # 4096 output
+    "gpt-4o": 128000,  # 4096 output
+    "gpt-4o-2024-05-13": 128000,  # 4096 output
 }
 model_token_mapping = gpt_token_mapping.copy()
 model_token_mapping.update({
@@ -281,7 +286,7 @@ mistralai_mapping = {
     "mistral-tiny": 32768,
     'open-mistral-7b': 32768,
     'open-mixtral-8x7b': 32768,
-    'open-mixtral-8x22b': 32768*2,
+    'open-mixtral-8x22b': 32768 * 2,
     'mistral-small-latest': 32768,
     'mistral-medium-latest': 32768,
 }
@@ -293,15 +298,20 @@ mistralai_mapping_outputs = {
     "mistral-tiny": 32768,
     'open-mistral-7b': 32768,
     'open-mixtral-8x7b': 32768,
-    'open-mixtral-8x22b': 32768*2,
+    'open-mixtral-8x22b': 32768 * 2,
     'mistral-small-latest': 32768,
     'mistral-medium-latest': 32768,
 }
 
+# https://platform.openai.com/docs/guides/function-calling
 openai_supports_functiontools = ["gpt-4-0613", "gpt-4-32k-0613", "gpt-3.5-turbo-0613", "gpt-3.5-turbo-16k-0613",
-                                 "gpt-4-1106-preview", "gpt-35-turbo-1106"]
+                                 "gpt-4-1106-preview", "gpt-35-turbo-1106", "gpt-4-turbo-2024-04-09",
+                                 "gpt-4o", "gpt-4o-2024-05-13",
+                                 ]
 
-openai_supports_json_mode = ["gpt-4-1106-preview", "gpt-35-turbo-1106"]
+openai_supports_json_mode = ["gpt-4-1106-preview", "gpt-35-turbo-1106", "gpt-4-turbo-2024-04-09",
+                             "gpt-4o", "gpt-4o-2024-05-13",
+                             ]
 
 # https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#model-summary-table-and-region-availability
 model_token_mapping_outputs = model_token_mapping.copy()
@@ -309,6 +319,9 @@ model_token_mapping_outputs.update({"gpt-4-1106-preview": 4096,
                                     "gpt-35-turbo-1106": 4096,
                                     "gpt-4-vision-preview": 4096,
                                     "gpt-4-1106-vision-preview": 4096,
+                                    "gpt-4-turbo-2024-04-09": 4096,
+                                    "gpt-4o": 4096,
+                                    "gpt-4o-2024-05-13": 4096,
                                     }
                                    )
 
@@ -377,8 +390,8 @@ def get_langchain_prompts(pre_prompt_query, prompt_query, pre_prompt_summary, pr
         pre_prompt_query1 = "Pay attention and remember the information below, which will help to answer the question or imperative after the context ends."
         prompt_query1 = "According to only the information in the document sources provided within the context above, write an insightful and well-structured response to: "
 
-    pre_prompt_summary1 = """In order to write a concise single-paragraph or bulleted list summary, pay attention to the following text."""
-    prompt_summary1 = "Using only the information in the document sources above, write a condensed and concise summary of key results (preferably as about 10 bullet points)."
+    pre_prompt_summary1 = """In order to write a concise summary, pay attention to the following text."""
+    prompt_summary1 = "Using only the information in the document sources above, write a condensed and concise well-structured Markdown summary of key results."
 
     hyde_llm_prompt1 = "Answer this question with vibrant details in order for some NLP embedding model to use that answer as better query than original question: "
 
@@ -570,7 +583,8 @@ user_prompt_for_fake_system_prompt0 = "Who are you and what do you do?"
 json_object_prompt0 = 'Ensure your entire response is outputted as a single piece of strict valid JSON text.'
 json_object_prompt_simpler0 = 'Ensure your response is strictly valid JSON text.'
 json_code_prompt0 = 'Ensure your entire response is outputted as strict valid JSON text inside a Markdown code block with the json language identifier.'
-json_schema_instruction0 = 'Ensure you follow this JSON schema:\n```json\n{properties_schema}\n```'
+json_code_prompt_if_no_schema0 = 'Ensure all JSON keys are less than 64 characters, and ensure JSON key names are made of only alphanumerics, underscores, or hyphens.'
+json_schema_instruction0 = 'Ensure you follow this JSON schema, and ensure to use the same key names as the schema:\n```json\n{properties_schema}\n```'
 
 coqui_lock_name = 'coqui'
 
@@ -589,4 +603,16 @@ template_prompt_type = 'template'  # for only chat template but not other specia
 
 git_hash_unset = "GET_GITHASH_UNSET"
 
+my_db_state0 = {LangChainMode.MY_DATA.value: [None, None, None]}
+langchain_modes0 = [LangChainMode.USER_DATA.value, LangChainMode.MY_DATA.value, LangChainMode.LLM.value,
+                    LangChainMode.DISABLED.value]
+langchain_mode_paths0 = {LangChainMode.USER_DATA.value: None}
+langchain_mode_types0 = {LangChainMode.USER_DATA.value: LangChainTypes.SHARED.value}
+selection_docs_state0 = dict(langchain_modes=langchain_modes0,
+                             langchain_mode_paths=langchain_mode_paths0,
+                             langchain_mode_types=langchain_mode_types0)
+requests_state0 = dict(headers='', host='', username='')
+roles_state0 = dict()
 none = ['', '\n', None]
+nonelist = [None, '', 'None']
+noneset = set(nonelist)

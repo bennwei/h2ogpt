@@ -23,6 +23,7 @@ from urllib3.exceptions import ConnectTimeoutError, MaxRetryError, ConnectionErr
 from requests.exceptions import ConnectionError as ConnectionError2
 from requests.exceptions import ReadTimeout as ReadTimeout2
 
+from src.gradio_funcs import merge_chat_conversation_history
 from src.db_utils import fetch_user
 
 if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
@@ -41,6 +42,7 @@ if have_hf_transfer and os.getenv('HF_HUB_ENABLE_HF_TRANSFER', 'None') != '0':
 
 os.environ['SCARF_NO_ANALYTICS'] = 'true'
 os.environ['DO_NOT_TRACK'] = 'true'
+os.environ['OTEL_SDK_DISABLED'] = 'true'
 
 os.environ['HF_HUB_DISABLE_TELEMETRY'] = '1'
 os.environ['BITSANDBYTES_NOWELCOME'] = '1'
@@ -74,16 +76,18 @@ from enums import DocumentSubset, LangChainMode, no_lora_str, model_token_mappin
     base_langchain_actions, google_mapping, google_mapping_outputs, generic_prefix, \
     generic_postfix, mistralai_mapping, mistralai_mapping_outputs, langchain_modes_intrinsic, valid_imagechange_models, \
     valid_imagegen_models, valid_imagestyle_models, groq_mapping, \
+    langchain_modes0, langchain_mode_types0, langchain_mode_paths0, \
     groq_mapping_outputs, llava_num_max, response_formats, noop_prompt_type, unknown_prompt_type, \
     json_object_prompt0, json_object_prompt_simpler0, json_code_prompt0, user_prompt_for_fake_system_prompt0, \
-    json_schema_instruction0
+    json_schema_instruction0, json_code_prompt_if_no_schema0, my_db_state0
+
 from loaders import get_loaders
 from utils import set_seed, clear_torch_cache, NullContext, wrapped_partial, EThread, get_githash, \
     import_matplotlib, get_device, makedirs, get_kwargs, start_faulthandler, get_hf_server, FakeTokenizer, \
     have_langchain, set_openai, cuda_vis_check, H2O_Fire, lg_to_gr, str_to_list, str_to_dict, get_token_count, \
     url_alive, have_wavio, have_soundfile, have_deepspeed, have_doctr, have_librosa, have_TTS, have_flash_attention_2, \
     have_diffusers, sanitize_filename, get_gradio_tmp, get_is_gradio_h2oai, is_gradio_version4, get_json, is_json_vllm, \
-    get_docs_tokens
+    get_docs_tokens, deduplicate_names
 
 start_faulthandler()
 import_matplotlib()
@@ -98,7 +102,7 @@ from transformers import GenerationConfig, AutoModel, TextIteratorStreamer, Auto
 
 from prompter import Prompter, inv_prompt_type_to_model_lower, non_hf_types, PromptType, get_prompt, generate_prompt, \
     openai_gpts, get_vllm_extra_dict, anthropic_gpts, google_gpts, mistralai_gpts, groq_gpts, \
-    gradio_to_llm, history_for_llm, is_gradio_vision_model, is_json_model, apply_chat_template
+    gradio_to_llm, history_for_llm, is_gradio_vision_model, is_json_model, apply_chat_template, is_vision_model
 from stopping import get_stopping
 from prompter_utils import get_use_chat_template
 
@@ -184,7 +188,7 @@ def main(
         use_autogptq: bool = False,
         load_awq: str = '',
         load_exllama: bool = False,
-        use_safetensors: bool = False,
+        use_safetensors: bool = True,
         revision: str = None,
         use_gpu_id: bool = True,
         base_model: str = '',
@@ -259,6 +263,8 @@ def main(
         gradio: bool = True,
         openai_server: bool = True,
         openai_port: int = 5001 if sys.platform == "darwin" else 5000,
+        openai_workers: int = 1,
+
         gradio_offline_level: int = 0,
         server_name: str = "0.0.0.0",
         share: bool = False,
@@ -386,10 +392,9 @@ def main(
 
         langchain_mode: str = None,
         user_path: str = None,
-        langchain_modes: list = [LangChainMode.USER_DATA.value, LangChainMode.MY_DATA.value, LangChainMode.LLM.value,
-                                 LangChainMode.DISABLED.value],
-        langchain_mode_paths: dict = {LangChainMode.USER_DATA.value: None},
-        langchain_mode_types: dict = {LangChainMode.USER_DATA.value: LangChainTypes.SHARED.value},
+        langchain_modes: list = langchain_modes0,
+        langchain_mode_paths: dict = langchain_mode_paths0,
+        langchain_mode_types: dict = langchain_mode_types0,
         detect_user_path_changes_every_query: bool = False,
         update_selection_state_from_cli: bool = True,
 
@@ -415,7 +420,6 @@ def main(
         use_openai_model: bool = False,
         hf_embedding_model: str = None,
         migrate_embedding_model: str = False,
-        auto_migrate_db: bool = False,
         cut_distance: float = 1.64,
         answer_with_sources: bool = True,
         append_sources_to_answer: bool = False,
@@ -435,6 +439,7 @@ def main(
         json_object_prompt=None,
         json_object_prompt_simpler=None,
         json_code_prompt=None,
+        json_code_prompt_if_no_schema=None,
         json_schema_instruction=None,
 
         add_chat_history_to_context: bool = True,
@@ -512,6 +517,7 @@ def main(
         guided_regex: str = '',
         guided_choice: str = '',
         guided_grammar: str = '',
+        guided_whitespace_pattern: str = None,
 
         asr_model: str = "openai/whisper-medium",
         asr_gpu: bool = True,
@@ -618,12 +624,17 @@ def main(
                               Use: "vllm:https://IP/v1" for OpenAI-compliant vLLM endpoint
                               Use: "vllm_chat:https://IP/v1" for OpenAI-Chat-compliant vLLM endpoint
 
-                              For example, for non-standard URL and API key for vllm, one would do:
+                              For example, for standard URL and API key for vllm, one would do:
+                                 vllm_chat:https://vllm.h2o.ai:None:/v1:1234ABCD
+                                 or for non-standard URL:
                                  vllm_chat:https://vllm.h2o.ai:None:/1b1219f7-4bb4-43e9-881f-fa8fa9fe6e04/v1:1234ABCD
                                  where vllm.h2o.ai is the DNS name of the IP, None means no extra port, so will be dropped from base_url when using API, /1b1219f7-4bb4-43e9-881f-fa8fa9fe6e04/v1 is the url of the "page" to access, and 1234ABCD is the api key
                               Or for example:
                                  vllm_chat:https://vllm.h2o.ai:5001:/1b1219f7-4bb4-43e9-881f-fa8fa9fe6e04/v1:1234ABCD
                                  where vllm.h2o.ai is the DNS name of the IP, 5001 is the port, /1b1219f7-4bb4-43e9-881f-fa8fa9fe6e04/v1 is the url of the "page" to access, and 1234ABCD is the api key
+
+                            For together.ai that is OpenAI compliant, use:
+                                vllm_chat:https://api.together.xyz:None:/v1:1234ABCD
 
                               Or for groq, can use OpenAI API like:
                                GROQ IS BROKEN FOR OPENAI API:
@@ -787,6 +798,7 @@ def main(
     :param openai_server: whether to launch OpenAI proxy server for local gradio server
            Disabled if API is disabled or --auth=closed
     :param openai_port: port for OpenAI proxy server
+    :param openai_workers: number of workers for OpenAI (1 means 1 worker, 0 means all physical cores, else choose)
     :param gradio_offline_level: > 0, then change fonts so full offline
            == 1 means backend won't need internet for fonts, but front-end UI might if font not cached
            == 2 means backend and frontend don't need internet to download any fonts.
@@ -1063,7 +1075,6 @@ def main(
            used to migrate all embeddings to a new one, but will take time to re-embed.
            Default (False) is to use the prior embedding for existing databases, and only use hf_embedding_model for new databases
            If had old database without embedding saved, then hf_embedding_model is also used.
-    :param auto_migrate_db: whether to automatically migrate any chroma<0.4 database from duckdb -> sqlite version
     :param cut_distance: Distance to cut off references with larger distances when showing references.
            1.64 is good to avoid dropping references for all-MiniLM-L6-v2, but instructor-large will always show excessive references.
            For all-MiniLM-L6-v2, a value of 1.5 can push out even more references, or a large value of 100 can avoid any loss of references.
@@ -1112,6 +1123,7 @@ def main(
     :param json_object_prompt: prompt for getting LLM to do JSON object
     :param json_object_prompt_simpler: simpler of "" for MistralAI
     :param json_code_prompt: prompt for getting LLm to do JSON in code block
+    :param json_code_prompt_if_no_schema: prompt part for LLM if not schema, but need good keys etc. for JSON (e.g. due to Claude-3 limitations)
     :param json_schema_instruction: prompt for LLM to use schema
 
     :param doc_json_mode: Use system prompting approach with JSON input and output, e.g. for codellama or GPT-4
@@ -1240,6 +1252,7 @@ def main(
     :param guided_regex:
     :param guided_choice:
     :param guided_grammar:
+    :param guided_whitespace_pattern:
 
     :param asr_model: Name of model for ASR, e.g. openai/whisper-medium or openai/whisper-large-v3 or distil-whisper/distil-large-v3 or microsoft/speecht5_asr
            whisper-medium uses about 5GB during processing, while whisper-large-v3 needs about 10GB during processing
@@ -1339,7 +1352,8 @@ def main(
     tts_stop_phrases = str_to_list(tts_stop_phrases)
     visible_image_models = str_to_list(visible_image_models)
     image_gpu_ids = str_to_list(image_gpu_ids)
-    assert len(image_gpu_ids) == len(visible_image_models)
+    if image_gpu_ids:
+        assert len(image_gpu_ids) == len(visible_image_models)
     if isinstance(metadata_in_context, str) and metadata_in_context == 'None':
         metadata_in_context = []
     if seed is None:
@@ -1351,12 +1365,14 @@ def main(
     assert isinstance(guided_regex, str)
     assert isinstance(guided_choice, str)
     assert isinstance(guided_grammar, str)
+    assert isinstance(guided_whitespace_pattern, (type(None), str))
 
     # defaults, but not keep around if not used so can use model_path_llama for prompt_type auto-setting
     # NOTE: avoid defaults for model_lock, require to be specified
     if base_model == 'llama':
         if not model_path_llama:
             model_path_llama = 'https://huggingface.co/TheBloke/Llama-2-7b-Chat-GGUF/resolve/main/llama-2-7b-chat.Q6_K.gguf?download=true'
+            prompt_type = 'llama2'
         if not prompt_type:
             prompt_type = 'unknown'
     elif base_model == 'gptj' and not model_name_gptj:
@@ -1499,7 +1515,10 @@ def main(
     h2ogpt_pid = os.getpid() if close_button and not is_public else None
 
     # allow set token directly
-    use_auth_token = os.environ.get("HUGGING_FACE_HUB_TOKEN", use_auth_token)
+    if not use_auth_token:
+        use_auth_token = os.environ.get("HUGGING_FACE_HUB_TOKEN", use_auth_token)
+    if isinstance(use_auth_token, str) and use_auth_token and 'HUGGING_FACE_HUB_TOKEN' not in os.environ:
+        os.environ['HUGGING_FACE_HUB_TOKEN'] = use_auth_token
     allow_upload_to_user_data = bool(
         int(os.environ.get("allow_upload_to_user_data", str(int(allow_upload_to_user_data)))))
     allow_upload_to_my_data = bool(int(os.environ.get("allow_upload_to_my_data", str(int(allow_upload_to_my_data)))))
@@ -1857,6 +1876,7 @@ def main(
                             json_object_prompt,
                             json_object_prompt_simpler,
                             json_code_prompt,
+                            json_code_prompt_if_no_schema,
                             json_schema_instruction,
 
                             temperature, top_p, top_k, penalty_alpha, num_beams,
@@ -1896,6 +1916,7 @@ def main(
                             guided_regex,
                             guided_choice,
                             guided_grammar,
+                            guided_whitespace_pattern,
 
                             verbose,
                             )
@@ -1996,7 +2017,8 @@ def main(
                                                        processor=processor_tts,
                                                        model=model_tts,
                                                        return_as_byte=return_as_byte,
-                                                       vocoder=vocoder_tts)
+                                                       vocoder=vocoder_tts,
+                                                       verbose=verbose)
             generate_speech_func = functools.partial(generate_speech,
                                                      processor=processor_tts,
                                                      model=model_tts,
@@ -2061,7 +2083,6 @@ def main(
                                     langchain_mode1, langchain_mode_paths, langchain_mode_types,
                                     hf_embedding_model,
                                     migrate_embedding_model,
-                                    auto_migrate_db,
                                     embedding_gpu_id=embedding_gpu_id,
                                     kwargs_make_db=locals().copy(),
                                     verbose=verbose)
@@ -2115,9 +2136,9 @@ def main(
                             visible_models=None, h2ogpt_key=None,
                             trust_remote_code=None,
                             json_vllm=None,
+                            display_name=None,
                             )
     model_state_none.update(other_model_state_defaults)
-    my_db_state0 = {LangChainMode.MY_DATA.value: [None, None, None]}
     selection_docs_state0 = dict(langchain_modes=langchain_modes,
                                  langchain_mode_paths=langchain_mode_paths,
                                  langchain_mode_types=langchain_mode_types)
@@ -2135,7 +2156,7 @@ def main(
 
     # get score model
     score_model_state0 = dict(model=None, tokenizer=None, device=None,
-                              base_model=None, tokenizer_base_model='', lora_weights='',
+                              base_model=None, display_name=None, tokenizer_base_model='', lora_weights='',
                               inference_server='', prompt_type='', prompt_dict='',
                               visible_models=None, h2ogpt_key=None,
                               reward_model=None)
@@ -2172,6 +2193,7 @@ def main(
     model_list = [dict(base_model=base_model, base_model0=base_model0,
                        tokenizer_base_model=tokenizer_base_model, lora_weights=lora_weights,
                        inference_server=inference_server, prompt_type=prompt_type, prompt_dict=prompt_dict,
+                       display_name=base_model,
                        visible_models=None, h2ogpt_key=None)]
     model_list[0].update(other_model_state_defaults)
     # FIXME: hyper per model, not about model loading
@@ -2188,6 +2210,7 @@ def main(
         # handle defaults user didn't have to pass
         # special defaults, ignore defaults for these if not specifically set, replace with ''
         model_dict['base_model'] = model_dict.get('base_model', '')
+        model_dict['display_name'] = model_dict.get('display_name', '')
         model_dict['tokenizer_base_model'] = model_dict.get('tokenizer_base_model', '')
         model_dict['lora_weights'] = model_dict.get('lora_weights', '')
         model_dict['inference_server'] = model_dict.get('inference_server', '')
@@ -2243,6 +2266,7 @@ def main(
         json_object_prompt = json_object_prompt or json_object_prompt0
         json_object_prompt_simpler = json_object_prompt_simpler or json_object_prompt_simpler0
         json_code_prompt = json_code_prompt or json_code_prompt0
+        json_code_prompt_if_no_schema = json_code_prompt_if_no_schema or json_code_prompt_if_no_schema0
         json_schema_instruction = json_schema_instruction or json_schema_instruction0
 
         # try to infer, ignore empty initial state leading to get_generate_params -> 'plain'
@@ -2300,12 +2324,15 @@ def main(
         assert len(model_state_none) == len(model_state0)
 
     visible_models = str_to_list(visible_models, allow_none=True)  # None means first model
-    all_possible_visible_models = [
+    all_possible_display_names = [
         x.get('base_model', xi) if x.get('base_model', '') != 'llama' or
                                    not x.get('llamacpp_dict').get('model_path_llama', '')
         else x.get('llamacpp_dict').get('model_path_llama', '')
         for xi, x in enumerate(model_states)]
-    visible_models_state0 = [x for xi, x in enumerate(all_possible_visible_models) if
+    display_names = deduplicate_names([x for x in all_possible_display_names])
+    all_possible_display_names = display_names
+    [x.update(dict(display_name=display_names[xi])) for xi, x in enumerate(model_states)]
+    visible_models_state0 = [x for xi, x in enumerate(all_possible_display_names) if
                              visible_models is None or
                              x in visible_models or
                              xi in visible_models]
@@ -2320,18 +2347,21 @@ def main(
             hasattr(model_state0['tokenizer'], 'model_max_length'):
         max_seq_len = model_state0['tokenizer'].model_max_length
 
+    local_kwargs = locals().copy()
+    local_kwargs['my_db_state0'] = my_db_state0
+
     # run
     if cli:
         from cli import run_cli
-        return run_cli(**get_kwargs(run_cli, **locals().copy()))
+        return run_cli(**get_kwargs(run_cli, **local_kwargs))
     elif not gradio:
         from eval import run_eval
-        return run_eval(**get_kwargs(run_eval, **locals().copy()))
+        return run_eval(**get_kwargs(run_eval, **local_kwargs))
     elif gradio or prepare_offline_level > 0:
         # imported here so don't require gradio to run generate
         from gradio_runner import go_gradio
         # assume gradio needs everything
-        go_gradio(**locals().copy())
+        go_gradio(**local_kwargs)
 
 
 def get_config(base_model,
@@ -2368,6 +2398,7 @@ def get_config(base_model,
             if 'not a local folder and is not a valid model identifier listed on' in str(
                     e) or '404 Client Error' in str(e) or "couldn't connect" in str(e) or \
                     'OSError: You are trying to access a gated repo.' in str(e) or \
+                    'Repository Not Found for url' in str(e) or \
                     'does not appear to have a file' in str(e) or \
                     'ncorrect path_or_model_id' in str(e):
                 # e.g. llama, gpjt, etc.
@@ -2525,7 +2556,7 @@ def get_non_lora_model(base_model, model_loader, load_half,
     elif load_awq:
         allowed_dict = dict(max_new_tokens=None,
                             trust_remote_code=True, fuse_layers=True,
-                            batch_size=1, safetensors=False,
+                            batch_size=1, use_safetensors=False,
                             max_memory=None, offload_folder=None)
         for k in model_kwargs.copy():
             if k not in allowed_dict:
@@ -2536,7 +2567,7 @@ def get_non_lora_model(base_model, model_loader, load_half,
             args = tuple([base_model])
         model = model_loader(
             *args,
-            safetensors=use_safetensors,
+            use_safetensors=use_safetensors,
             **model_kwargs,
         )
     elif load_in_8bit or load_in_4bit or not load_half:
@@ -2631,7 +2662,7 @@ def get_model_retry(**kwargs):
                     'Could not a find model' in stre or \
                     'safetensors' in stre or \
                     'not appear to have a file named pytorch_model.bin' in stre:
-                kwargs['use_safetensors'] = True
+                kwargs['use_safetensors'] = not kwargs.get('use_safetensors', True)
             if 'current architecture does not support Flash Attention 2' in stre:
                 kwargs['use_flash_attention_2'] = False
             clear_torch_cache()
@@ -2911,9 +2942,13 @@ def get_model(
             set_model_max_len(max_seq_len, tokenizer, verbose=False)
             # if using fake tokenizer, not really accurate when lots of numbers, give a bit of buffer, else get:
             # Generation Failed: Input validation error: `inputs` must have less than 2048 tokens. Given: 2233
-            tokenizer.model_max_length = int(tokenizer.model_max_length - 50)
+            tokenizer.model_max_length = int(tokenizer.model_max_length - 70)
     else:
         tokenizer = None
+
+    # if base_model in ["HuggingFaceM4/idefics2-8b-chatty", "HuggingFaceM4/idefics2-8b"]:
+    #    # work-around until https://huggingface.co/HuggingFaceM4/idefics2-8b-chatty/discussions/5 fixed
+    #    tokenizer.chat_template = "{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}"
 
     if isinstance(inference_server, str) and inference_server.startswith("http"):
         inference_server, gr_client, hf_client = get_client_from_inference_server(inference_server,
@@ -3163,7 +3198,10 @@ def get_model(
             #    # FIXME: not all models, only some, so do what can
             #    print("Can't get native Mistral tokenizer for %s: %s" % (base_model, str(e)))
             tokenizer = FakeTokenizer(model_max_length=max_seq_len, is_hf=True,
-                                      tokenizer=AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.2'))
+                                      tokenizer=AutoTokenizer.from_pretrained('mistralai/Mistral-7B-Instruct-v0.2',
+                                                                              token=use_auth_token,
+                                                                              trust_remote_code=trust_remote_code,
+                                                                              ))
 
         if inference_server.startswith('groq') or base_model in groq_gpts:
             if inference_server.startswith('groq'):
@@ -3512,7 +3550,7 @@ def get_hf_model(load_8bit: bool = False,
                         elif load_awq:
                             allowed_dict = dict(max_new_tokens=None,
                                                 trust_remote_code=True, fuse_layers=True,
-                                                batch_size=1, safetensors=False,
+                                                batch_size=1, use_safetensors=False,
                                                 max_memory=None, offload_folder=None)
                             for k in model_kwargs.copy():
                                 if k not in allowed_dict:
@@ -3523,7 +3561,7 @@ def get_hf_model(load_8bit: bool = False,
                                 args = tuple([base_model])
                             model = model_loader(
                                 *args,
-                                safetensors=use_safetensors,
+                                use_safetensors=use_safetensors,
                                 **model_kwargs,
                             )
                         else:
@@ -3726,9 +3764,9 @@ def get_score_model(score_model: str = None,
 
 
 def evaluate_fake(*args, **kwargs):
-    yield dict(response=invalid_key_msg, sources='', save_dict=dict(extra_dict=dict(base_model='')),
-               llm_answers=dict(response_raw=''), response_no_refs='',
-               sources_str='', audio=None, prompt_raw='')
+    yield dict(response=invalid_key_msg, sources=[], save_dict=dict(prompt='INVALID', extra_dict=dict(num_prompt_tokens=0, base_model='')),
+               llm_answers=dict(response_raw=invalid_key_msg), response_no_refs=invalid_key_msg,
+               sources_str='', audio=None, prompt_raw='INVALID')
     return
 
 
@@ -3788,6 +3826,7 @@ def evaluate(
         json_object_prompt,
         json_object_prompt_simpler,
         json_code_prompt,
+        json_code_prompt_if_no_schema,
         json_schema_instruction,
 
         system_prompt,
@@ -3830,6 +3869,7 @@ def evaluate(
         guided_regex,
         guided_choice,
         guided_grammar,
+        guided_whitespace_pattern,
 
         # END NOTE: Examples must have same order of parameters
         captions_model=None,
@@ -3851,6 +3891,8 @@ def evaluate(
         save_dir=None,
         sanitize_bot_response=False,
         model_state0=None,
+        use_auth_token=None,
+        trust_remote_code=None,
         memory_restriction_level=None,
         max_max_new_tokens=None,
         is_public=None,
@@ -3868,7 +3910,6 @@ def evaluate(
         use_openai_model=None,
         hf_embedding_model=None,
         migrate_embedding_model=None,
-        auto_migrate_db=None,
         cut_distance=None,
         db_type=None,
         n_jobs=None,
@@ -3935,7 +3976,6 @@ def evaluate(
     assert use_openai_model is not None
     assert hf_embedding_model is not None
     assert migrate_embedding_model is not None
-    assert auto_migrate_db is not None
     assert db_type is not None
     assert top_k_docs is not None and isinstance(top_k_docs, int)
     assert chunk is not None and isinstance(chunk, bool)
@@ -3958,6 +3998,9 @@ def evaluate(
         extract_frames = extract_frames0
     if seed is None:
         seed = 0
+    if guided_whitespace_pattern == '':
+        # translate empty string to None
+        guided_whitespace_pattern = None
 
     assert response_format in response_formats, "Invalid response_format: %s, must be in %s" % (
         response_format, response_formats)
@@ -3990,6 +4033,9 @@ def evaluate(
         if isinstance(visible_image_models, list):
             assert len(visible_image_models) > 0, "visible_image_models is empty"
             visible_image_models = visible_image_models[0]
+        if visible_image_models == '' and image_model_dict:
+            # choose first if nothing passed
+            visible_image_models = list(image_model_dict.keys())[0]
         image_model_dict = image_model_dict[visible_image_models]
         pipe, make_image = image_model_dict['pipe'], image_model_dict['make_image']
 
@@ -4063,6 +4109,7 @@ def evaluate(
     tokenizer = chosen_model_state['tokenizer']
     device = chosen_model_state['device']
     base_model = chosen_model_state['base_model']
+    display_name = chosen_model_state['display_name']
     tokenizer_base_model = chosen_model_state['tokenizer_base_model']
     lora_weights = chosen_model_state['lora_weights']
     inference_server = chosen_model_state['inference_server']
@@ -4208,6 +4255,8 @@ def evaluate(
         json_object_prompt_simpler = '\n' + json_object_prompt_simpler + '\n\n'
         json_code_prompt = json_code_prompt or json_code_prompt0
         json_code_prompt = '\n' + json_code_prompt + '\n\n'
+        json_code_prompt_if_no_schema = json_code_prompt_if_no_schema or json_code_prompt_if_no_schema0
+        json_code_prompt_if_no_schema = '\n' + json_code_prompt_if_no_schema + '\n\n'
         json_schema_instruction = json_schema_instruction or json_schema_instruction0
         json_schema_instruction = '\n' + json_schema_instruction + '\n\n'
 
@@ -4260,7 +4309,7 @@ def evaluate(
             if guided_json_properties:
                 pre_instruction = json_code_prompt + schema_instruction
             else:
-                pre_instruction = json_code_prompt
+                pre_instruction = json_code_prompt + json_code_prompt_if_no_schema
         # ignore these, make no sense for JSON mode
         system_prompt = ''  # can mess up the model, e.g. 70b
         if instruction:
@@ -4292,7 +4341,6 @@ def evaluate(
                         use_openai_embedding=use_openai_embedding,
                         hf_embedding_model=hf_embedding_model,
                         migrate_embedding_model=migrate_embedding_model,
-                        auto_migrate_db=auto_migrate_db,
                         for_sources_list=True,
                         verbose=verbose,
                         n_jobs=n_jobs,
@@ -4311,8 +4359,7 @@ def evaluate(
                            inference_server.startswith('google') or \
                            inference_server.startswith('mistralai') or \
                            inference_server.startswith('groq') or \
-                           (image_file or image_control) and \
-                           inference_server.startswith('openai')
+                           (image_file or image_control) and (not gradio_server)
     do_langchain_path = langchain_mode not in [False, 'Disabled', 'LLM'] or \
                         langchain_only_model or \
                         force_langchain_evaluate or \
@@ -4340,6 +4387,7 @@ def evaluate(
                           )
     extra_dict = gen_hyper_dict.copy()
     extra_dict.update(dict(base_model=base_model,
+                           display_name=display_name,
                            prompt_type=prompt_type,
                            inference_server=inference_server,
                            langchain_mode=langchain_mode,
@@ -4359,7 +4407,7 @@ def evaluate(
                            tokens_persecond=None,
                            llamacpp_dict=llamacpp_dict,
                            ))
-    save_dict = dict(base_model=base_model, save_dir=save_dir, extra_dict=extra_dict)
+    save_dict = dict(base_model=base_model, display_name=display_name, save_dir=save_dir, extra_dict=extra_dict)
 
     if do_langchain_path:
         text = ''
@@ -4431,7 +4479,6 @@ def evaluate(
                 use_openai_model=use_openai_model,
                 hf_embedding_model=hf_embedding_model,
                 migrate_embedding_model=migrate_embedding_model,
-                auto_migrate_db=auto_migrate_db,
                 first_para=first_para,
                 text_limit=text_limit,
                 sources_show_text_in_accordion=sources_show_text_in_accordion,
@@ -4474,6 +4521,7 @@ def evaluate(
                 json_object_prompt=json_object_prompt,
                 json_object_prompt_simpler=json_object_prompt_simpler,
                 json_code_prompt=json_code_prompt,
+                json_code_prompt_if_no_schema=json_code_prompt_if_no_schema,
                 json_schema_instruction=json_schema_instruction,
 
                 text_context_list=text_context_list,
@@ -4524,6 +4572,7 @@ def evaluate(
                 guided_regex=guided_regex,
                 guided_choice=guided_choice,
                 guided_grammar=guided_grammar,
+                guided_whitespace_pattern=guided_whitespace_pattern,
 
                 json_vllm=json_vllm,
 
@@ -4633,13 +4682,15 @@ def evaluate(
                                      presence_penalty=(repetition_penalty - 1.0) * 2.0 + 0.0,  # so good default
                                      )
             try:
-                if inf_type in ['vllm', 'vllm_chat']:
+                if inf_type in ['vllm', 'vllm_chat'] and chosen_model_state['json_vllm']:
+                    response_format_real = response_format if guided_json and response_format == 'json_object' else 'text'
                     vllm_extra_dict = get_vllm_extra_dict(tokenizer, stop_sequences=stop_sequences,
-                                                          response_format=response_format if guided_json else 'text',
+                                                          response_format=response_format_real,
                                                           guided_json=guided_json,
                                                           guided_regex=guided_regex,
                                                           guided_choice=guided_choice,
                                                           guided_grammar=guided_grammar,
+                                                          guided_whitespace_pattern=guided_whitespace_pattern,
                                                           # repetition_penalty=repetition_penalty,  # could pass
                                                           )
                 else:
@@ -4948,6 +4999,7 @@ def evaluate(
                                          json_object_prompt=json_object_prompt,
                                          json_object_prompt_simpler=json_object_prompt_simpler,
                                          json_code_prompt=json_code_prompt,
+                                         json_code_prompt_if_no_schema=json_code_prompt_if_no_schema,
                                          json_schema_instruction=json_schema_instruction,
 
                                          system_prompt=system_prompt,
@@ -4981,6 +5033,7 @@ def evaluate(
                                          guided_regex=guided_regex,
                                          guided_choice=guided_choice,
                                          guided_grammar=guided_grammar,
+                                         guided_whitespace_pattern=guided_whitespace_pattern,
                                          )
                     assert len(set(list(client_kwargs.keys())).symmetric_difference(eval_func_param_names)) == 0
                     api_name = '/submit_nochat_api'  # NOTE: like submit_nochat but stable API for string dict passing
@@ -5167,6 +5220,8 @@ def evaluate(
                              remove_invalid_values=True,
                              use_cache=use_cache,
                              max_new_tokens=max_new_tokens,  # unsure if required here
+                             token=use_auth_token,
+                             trust_remote_code=trust_remote_code,
                              )
     if do_sample:
         gen_config_kwargs.update(dict(temperature=float(temperature),
@@ -5507,6 +5562,7 @@ def get_generate_params(model_lower,
                         json_object_prompt,
                         json_object_prompt_simpler,
                         json_code_prompt,
+                        json_code_prompt_if_no_schema,
                         json_schema_instruction,
                         temperature, top_p, top_k, penalty_alpha, num_beams,
                         max_new_tokens, min_new_tokens, early_stopping, max_time,
@@ -5544,6 +5600,7 @@ def get_generate_params(model_lower,
                         guided_regex,
                         guided_choice,
                         guided_grammar,
+                        guided_whitespace_pattern,
 
                         verbose,
                         ):
@@ -5733,6 +5790,7 @@ y = np.random.randint(0, 1, 100)
                     json_object_prompt,
                     json_object_prompt_simpler,
                     json_code_prompt,
+                    json_code_prompt_if_no_schema,
                     json_schema_instruction,
 
                     system_prompt,
@@ -5772,6 +5830,7 @@ y = np.random.randint(0, 1, 100)
                     guided_regex,
                     guided_choice,
                     guided_grammar,
+                    guided_whitespace_pattern,
                     ]
         # adjust examples if non-chat mode
         if not chat:
@@ -5941,26 +6000,6 @@ def get_minmax_top_k_docs(is_public, from_ui):
         max_top_k_docs = 1000
         label_top_k_docs = label_top_k_docs + " (-1 = auto fill model context, all pages/docs for summarize)"
     return min_top_k_docs, max_top_k_docs, label_top_k_docs
-
-
-def merge_chat_conversation_history(chat_conversation1, history):
-    # chat_conversation and history ordered so largest index of list is most recent
-    if chat_conversation1:
-        chat_conversation1 = str_to_list(chat_conversation1)
-        for conv1 in chat_conversation1:
-            assert isinstance(conv1, (list, tuple))
-            assert len(conv1) == 2
-
-    if isinstance(history, list):
-        # make copy so only local change
-        if chat_conversation1:
-            # so priority will be newest that comes from actual chat history from UI, then chat_conversation
-            history = chat_conversation1 + history.copy()
-    elif chat_conversation1:
-        history = chat_conversation1
-    else:
-        history = []
-    return history
 
 
 def remove_refs(text, keep_sources_in_context, langchain_mode, hyde_level, gradio_errors_to_chatbot):

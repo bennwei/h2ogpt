@@ -67,6 +67,7 @@ def run_eval(  # for local function:
         json_object_prompt=None,
         json_object_prompt_simpler=None,
         json_code_prompt=None,
+        json_code_prompt_if_no_schema=None,
         json_schema_instruction=None,
 
         image_audio_loaders=None,
@@ -106,6 +107,7 @@ def run_eval(  # for local function:
         guided_regex=None,
         guided_choice=None,
         guided_grammar=None,
+        guided_whitespace_pattern=None,
 
         # for evaluate kwargs:
         captions_model=None,
@@ -127,6 +129,8 @@ def run_eval(  # for local function:
         allow_chat_system_prompt=None,
         src_lang=None, tgt_lang=None, concurrency_count=None, save_dir=None, sanitize_bot_response=None,
         model_state0=None,
+        use_auth_token=None,
+        trust_remote_code=None,
         score_model_state0=None,
         max_max_new_tokens=None,
         is_public=None,
@@ -135,7 +139,7 @@ def run_eval(  # for local function:
         my_db_state0=None, selection_docs_state0=None, dbs=None, langchain_modes=None, langchain_mode_paths=None,
         detect_user_path_changes_every_query=None,
         use_openai_embedding=None, use_openai_model=None,
-        hf_embedding_model=None, migrate_embedding_model=None, auto_migrate_db=None,
+        hf_embedding_model=None, migrate_embedding_model=None,
         cut_distance=None,
         answer_with_sources=None,
         append_sources_to_answer=None,

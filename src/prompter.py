@@ -238,6 +238,7 @@ prompt_type_to_model_name = {
              ],
     "sealion": ['aisingapore/sea-lion-7b-instruct'],
     "aya": ["CohereForAI/aya-101"],
+    "idefics2": ["HuggingFaceM4/idefics2-8b-chatty", "HuggingFaceM4/idefics2-8b-chat"],
     # don't actually add, else use_chat_template wouldn't function right for LLM mode
     # 'cohere_grounded': ["CohereForAI/c4ai-command-r-v01", "CohereForAI/c4ai-command-r-plus"],
 }
@@ -296,7 +297,8 @@ def is_vision_model(base_model):
     return is_gradio_vision_model(base_model) or \
         base_model.startswith('claude-3-') or \
         base_model in ['gpt-4-vision-preview', 'gpt-4-1106-vision-preview'] or \
-        base_model in ["gemini-pro-vision", "gemini-1.0-pro-vision-latest", "gemini-1.5-pro-latest"]
+        base_model in ["gemini-pro-vision", "gemini-1.0-pro-vision-latest", "gemini-1.5-pro-latest"] or \
+        base_model in ["HuggingFaceM4/idefics2-8b-chatty", "HuggingFaceM4/idefics2-8b-chat"]
 
 
 def is_video_model(base_model):
@@ -1574,6 +1576,27 @@ Remember to tailor the activities to the birthday child's interests and preferen
         chat_turn_sep = '<|im_end|>\n'
         humanstr = PreInstruct
         botstr = PreResponse
+    elif prompt_type in [PromptType.idefics2.value, str(PromptType.idefics2.value),
+                         PromptType.idefics2.name]:
+        # messages template: https://huggingface.co/HuggingFaceM4/idefics2-8b/discussions/36/files
+        # "chat_template": "{% for message in messages %}{{message['role'].capitalize()}}{% if message['content'][0]['type'] == 'image' %}{{':'}}{% else %}{{': '}}{% endif %}{% for line in message['content'] %}{% if line['type'] == 'text' %}{{line['text']}}{% elif line['type'] == 'image' %}{{ '<image>' }}{% endif %}{% endfor %}<end_of_utterance>\n{% endfor %}{% if add_generation_prompt %}{{ 'Assistant:' }}{% endif %}",
+        can_handle_system_prompt = True
+        if system_prompt in [None, 'None', 'auto']:
+            system_prompt = "You are a helpful, respectful and honest assistant. Always answer as helpfully as possible, while being safe. Your answers should not include any harmful, unethical, racist, sexist, toxic, dangerous, or illegal content. Please ensure that your responses are socially unbiased and positive in nature."
+        promptA = promptB = "System: %s<end_of_utterance>\n" % system_prompt if system_prompt and not reduced else ''
+
+        PreInstruct = """User: """
+
+        PreInput = None
+
+        PreResponse = """Assistant:"""
+        terminate_response = ['User:', "Assistant:"]
+        chat_turn_sep = '<end_of_utterance>\n'
+        chat_sep = '<end_of_utterance>\n'
+        humanstr = PreInstruct
+        botstr = PreResponse
+        if making_context:
+            PreResponse = botstr + ' '
     else:
         raise RuntimeError("No such prompt_type=%s" % prompt_type)
 
@@ -1726,7 +1749,7 @@ class Prompter(object):
         :return:
         """
         if self.prompt_type in [template_prompt_type, unknown_prompt_type]:
-            assert self.use_chat_template
+            assert self.use_chat_template, "Please specify prompt_type or pass tokenizer_base_model with chat template"
             assert self.tokenizer is not None
             from src.gen import apply_chat_template
             instruction = data_point['instruction']
@@ -1981,6 +2004,7 @@ def get_vllm_extra_dict(tokenizer, stop_sequences=[], repetition_penalty=None,
                         guided_regex=None,
                         guided_choice=None,
                         guided_grammar=None,
+                        guided_whitespace_pattern=None,
                         ):
     stop_token_ids = [tokenizer.added_tokens_encoder[x] for x in stop_sequences if
                       hasattr(tokenizer, 'added_tokens_encoder') and x in tokenizer.added_tokens_encoder]
@@ -1990,7 +2014,7 @@ def get_vllm_extra_dict(tokenizer, stop_sequences=[], repetition_penalty=None,
     if repetition_penalty is not None:
         vllm_extra_dict['extra_body'].update(repetition_penalty=repetition_penalty)
 
-    if response_format:
+    if response_format and response_format != 'text':
         vllm_extra_dict['extra_body'].update(dict(response_format={'type': response_format}))
     if guided_json:
         vllm_extra_dict['extra_body'].update(guided_json=guided_json)
@@ -2000,6 +2024,8 @@ def get_vllm_extra_dict(tokenizer, stop_sequences=[], repetition_penalty=None,
         vllm_extra_dict['extra_body'].update(guided_choice=guided_choice)
     if guided_grammar:
         vllm_extra_dict['extra_body'].update(guided_grammar=guided_grammar)
+    if guided_whitespace_pattern:
+        vllm_extra_dict['extra_body'].update(guided_whitespace_pattern=guided_whitespace_pattern)
 
     return vllm_extra_dict
 
@@ -2376,21 +2402,38 @@ def history_for_llm(history):
     return history_new
 
 
-def get_llm_history(history):
+def get_llm_history(history, only_text=False):
     # avoid None users used for sources, errors, etc.
     if history is None:
         history = []
+    last_user_ii = -1
     for ii in range(len(history) - 1, -1, -1):
         if history[ii] and history[ii][0] is not None:
             last_user_ii = ii
-            history = history[:last_user_ii + 1]
             break
-    return history
+
+    if last_user_ii != -1:
+        history = history[:last_user_ii + 1]
+    else:
+        history = []
+
+    if only_text:
+        history_new = []
+        for ii, message1 in enumerate(history):
+            if len(message1) == 2 and (message1[0] is None or message1[1] is None):
+                # then not really part of LLM, internal, so avoid
+                continue
+            if len(message1) == 2:
+                history_new.append((message1[0], message1[1]))
+    else:
+        history_new = history
+
+    return history_new
 
 
 def apply_chat_template(instruction, system_prompt, history, tokenizer, user_prompt_for_fake_system_prompt=None,
                         test_only=False, verbose=False):
-    history = get_llm_history(history)
+    history = get_llm_history(history, only_text=True)
     prompt = ''
     exceptions = []
 
@@ -2419,3 +2462,36 @@ def apply_chat_template(instruction, system_prompt, history, tokenizer, user_pro
                 raise
     assert prompt, "Prompt was not set: %s" % str(exceptions)
     return prompt
+
+
+def convert_messages_and_extract_images(tuple_list):
+    messages = []
+    images = []
+
+    for user, bot in tuple_list:
+        user_content = []
+
+        if isinstance(user, str):
+            user_content.append({"type": "text", "text": user})
+        elif isinstance(user, (list, tuple)):
+            if isinstance(user[1], list):
+                for img in user[1]:
+                    user_content.append({"type": "image"})
+                    images.append(img)
+            else:
+                user_content.append({"type": "image"})
+                images.append(user[1])
+            user_content.append({"type": "text", "text": user[0]})
+
+        messages.append({
+            "role": "user",
+            "content": user_content
+        })
+
+        if bot is not None:
+            messages.append({
+                "role": "assistant",
+                "content": [{"type": "text", "text": bot}]
+            })
+
+    return messages, images

@@ -35,8 +35,8 @@ from pydantic import BaseModel
 
 class ReturnType(BaseModel):
     reply: str | list[str] | None
-    prompt_raw: str | None
-    actual_llm: str | None
+    prompt_raw: str | None = None
+    actual_llm: str | None = None
     text_context_list: list[str] | None = []
     input_tokens: int = 0
     output_tokens: int = 0
@@ -90,7 +90,7 @@ pre_prompt_query0 = "Pay attention and remember the information below, which wil
 prompt_query0 = "According to only the information in the document sources provided within the context above: "
 
 pre_prompt_summary0 = """"""
-prompt_summary0 = "Using only the information in the document sources above, write a condensed and concise summary of key results (preferably as bullet points)."
+prompt_summary0 = "Using only the information in the document sources above, write a condensed and concise well-structured Markdown summary of key results."
 
 pre_prompt_extraction0 = (
     """In order to extract information, pay attention to the following text."""
@@ -693,6 +693,7 @@ class GradioClient(Client):
         json_object_prompt: str = None,
         json_object_prompt_simpler: str = None,
         json_code_prompt: str = None,
+        json_code_prompt_if_no_schema: str = None,
         json_schema_instruction: str = None,
         model: str | int | None = None,
         stream_output: bool = False,
@@ -726,6 +727,7 @@ class GradioClient(Client):
         guided_regex: str = "",
         guided_choice: str = "",
         guided_grammar: str = "",
+        guided_whitespace_pattern: str = None,
         prompt_type: Union[int, str] = None,
         prompt_dict: Dict = None,
         jq_schema=".[]",
@@ -814,6 +816,7 @@ class GradioClient(Client):
             :param json_object_prompt: prompt for getting LLM to do JSON object
             :param json_object_prompt_simpler: simpler of "" for MistralAI
             :param json_code_prompt: prompt for getting LLm to do JSON in code block
+            :param json_code_prompt_if_no_schema: prompt for getting LLM to do JSON in code block if no schema
             :param json_schema_instruction: prompt for LLM to use schema
 
             :param h2ogpt_key: Access Key to h2oGPT server (if not already set in client at init time)
@@ -871,6 +874,7 @@ class GradioClient(Client):
             :param guided_regex:
             :param guided_choice:
             :param guided_grammar:
+            :param guided_whitespace_pattern:
 
             :param prompt_type: type of prompt, usually matched to fine-tuned model or plain for foundational model
             :param prompt_dict: If prompt_type=custom, then expects (some) items returned by get_prompt(..., return_dict=True)
@@ -1041,7 +1045,7 @@ class GradioClient(Client):
                     prompt_raw = res_dict.get("prompt_raw", "")
 
                     try:
-                        actual_llm = res_dict["save_dict"]["base_model"]  # fast path
+                        actual_llm = res_dict["save_dict"]["display_name"]  # fast path
                     except Exception as e:
                         print_warning(
                             f"Unable to access save_dict to get actual_llm: {str(e)}"
@@ -1098,13 +1102,7 @@ class GradioClient(Client):
                             prompt_raw = res_dict.get(
                                 "prompt_raw", ""
                             )  # only filled at end
-                            if prompt_raw:
-                                if langchain_action != LangChainAction.EXTRACT.value:
-                                    text_chunk = response.strip()
-                                else:
-                                    text_chunk = [r.strip() for r in ast.literal_eval(response)]
-                            else:
-                                text_chunk = response[len(text0) :]  # only keep new stuff
+                            text_chunk = response[len(text0) :]  # only keep new stuff
                             if not text_chunk:
                                 time.sleep(0.001)
                                 continue
@@ -1112,13 +1110,7 @@ class GradioClient(Client):
                             assert text_chunk, "must yield non-empty string"
                             if time_to_first_token is None:
                                 time_to_first_token = time.time() - t0
-                            yield ReturnType(
-                                reply=text_chunk,
-                                text_context_list=texts_out,
-                                prompt_raw=prompt_raw,
-                                actual_llm=actual_llm,
-                                time_to_first_token=time_to_first_token,
-                            )
+                            yield ReturnType(reply=text_chunk)  # streaming part
                         time.sleep(0.005)
 
                     # Get final response (if anything left), but also get the actual references (texts_out), above is empty.
@@ -1153,13 +1145,11 @@ class GradioClient(Client):
                         t_taken_s = time.time() - t0
                         t_taken = "%.4f" % t_taken_s
 
-                        if prompt_raw:
-                            if langchain_action != LangChainAction.EXTRACT.value:
-                                text_chunk = response.strip()
-                            else:
-                                text_chunk = [r.strip() for r in ast.literal_eval(response)]
+                        assert prompt_raw, "must have prompt_raw for final response"
+                        if langchain_action != LangChainAction.EXTRACT.value:
+                            text_chunk = response.strip()
                         else:
-                            text_chunk = response[len(text0) :]  # only keep new stuff
+                            text_chunk = [r.strip() for r in ast.literal_eval(response)]
 
                         if not text_chunk:
                             actual_llm = (
@@ -1185,7 +1175,7 @@ class GradioClient(Client):
 
                         try:
                             actual_llm = res_dict["save_dict"][
-                                "base_model"
+                                "display_name"
                             ]  # fast path
                         except Exception as e:
                             print_warning(
@@ -1215,7 +1205,7 @@ class GradioClient(Client):
 
                         self.chat_conversation[-1] = (
                             instruction,
-                            response[len(text0) :],
+                            text_chunk,
                         )
                     else:
                         assert not success
@@ -1301,7 +1291,7 @@ class GradioClient(Client):
         if self.config is None:
             self.setup()
         return [
-            x["base_model"]
+            x["display_name"]
             for x in ast.literal_eval(self.predict(api_name="/model_names"))
         ]
 
@@ -1361,6 +1351,7 @@ class GradioClient(Client):
                 res_dict.update(
                     dict(
                         response=response,
+                        sources=sources,
                         error=strex,
                         response_no_refs=response,
                     )
@@ -1423,6 +1414,7 @@ class GradioClient(Client):
         res_dict.update(
             dict(
                 response=response,
+                sources=sources,
                 error=strex,
                 response_no_refs=response,
             )

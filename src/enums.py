@@ -266,6 +266,7 @@ google_mapping = {
     "gemini-1.0-ultra-latest": 30720,
     "gemini-ultra": 30720,
     "gemini-1.5-pro-latest": 1048576,
+    "gemini-1.5-flash-latest": 1048576,
 }
 
 # FIXME: at least via current API:
@@ -277,6 +278,7 @@ google_mapping_outputs = {
     "gemini-1.0-ultra-latest": 2048,
     "gemini-ultra": 2048,
     "gemini-1.5-pro-latest": 8192,
+    "gemini-1.5-flash-latest": 8192,
 }
 
 mistralai_mapping = {
@@ -597,6 +599,7 @@ invalid_json_str = '{}'
 summary_prefix = 'Summarize Collection : '
 extract_prefix = 'Extract Collection : '
 
+empty_prompt_type = ''
 noop_prompt_type = 'plain'
 unknown_prompt_type = 'unknown'  # or None or '' are valid
 template_prompt_type = 'template'  # for only chat template but not other special (e.g. grounded) templates

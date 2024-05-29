@@ -1,5 +1,24 @@
 ## Frequently asked questions
 
+
+### Parallel and Isolated OpenAI Proxy Servers
+
+```bash
+python generate.py --openai_server=True --openai_workers=2 ...
+```
+will launch 2 OpenAI proxy servers using FastAPIs workers, so each is a separate fork independent of any other process.
+
+This speeds up any calls to the OpenAI server, letting FastAPI handle concurrency and load balancing between the different workers using same IP/port via OS management.
+
+### Parallel and Isolated Ingestion Servers
+
+```bash
+python generate.py --function_server=True --function_server_workers=2 ...
+```
+will launch 2 Ingestion proxy servers using FastAPIs workers, so each is a separate fork independent of any other process.  If ASR, DocTR, captions, etc. are enabled, these will be run on same GPUs in separate processes.
+
+This helps keep the main UI server isolated from ingestion tasks that can consume alot of cpu or hang the Gradio server.
+
 ### Open Web UI
 
 Run h2oGPT somehow with OpenAI server active (as is default).
@@ -93,6 +112,11 @@ TRANSFORMERS_OFFLINE=1 python generate.py --base_model=llama --model_path_llama=
 which assumes the model was downloaded to default location of `llamacpp_path`.  This works for offline if previously used the earlier command that got the tokenizer.
 
 Note the chat template is defined by the model card's [tokenizer_config.json](https://huggingface.co/meta-llama/Meta-Llama-3-8B-Instruct/blob/main/tokenizer_config.json#L2053).
+
+Also, `--base_model` accepts a few forms of passing urls, TheBloke, etc. for GGUF, but not others.  For more general GGUF locations, you should specify the file or url download link explicitly.  E.g. for Phi:
+```bash
+python generate.py  --tokenizer_base_model=microsoft/Phi-3-mini-4k-instruct --base_model=llama --llama_cpp_model=https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf --max_seq_len=4096 
+```
 
 ### Mixtral AWQ
 
@@ -774,11 +798,27 @@ If issues, try logging in via `huggingface-cli login` (run `git config --global 
 
 Using TEI leads to much faster embedding generation as well as better memory leak avoidance due to [multi-threading and torch](https://github.com/pytorch/pytorch/issues/64412).
 
-Using docker for [TEI](https://github.com/huggingface/text-embeddings-inference?tab=readme-ov-file#docker):
+Using docker for [TEI](https://github.com/huggingface/text-embeddings-inference?tab=readme-ov-file#docker).
+
+For compute capability 80 use:
+```bash
+docker run -d --gpus '"device=0"' --shm-size 3g -v $HOME/.cache/huggingface/hub/:/data -p 5555:80 --pull always ghcr.io/huggingface/text-embeddings-inference:1.2 --model-id BAAI/bge-large-en-v1.5 --revision refs/pr/5 --hf-api-token=$HUGGING_FACE_HUB_TOKEN --max-client-batch-size=4096 --max-batch-tokens=2097152
 ```
-docker run -d --gpus '"device=0"' --shm-size 3g -v $HOME/.cache/huggingface/hub/:/data -p 5555:80 --pull always ghcr.io/huggingface/text-embeddings-inference:0.6 --model-id BAAI/bge-large-en-v1.5 --revision refs/pr/5 --hf-api-token=$HUGGING_FACE_HUB_TOKEN --max-client-batch-size=4096 --max-batch-tokens=2097152
-```
-where passing `--hf-api-token=$HUGGING_FACE_HUB_TOKEN` is only required if the model is private. Use [different tags](https://github.com/huggingface/text-embeddings-inference?tab=readme-ov-file#docker-images) for Turing, H100, or CPU etc.  Adjust `--max-batch-tokens` to smaller for smaller GPUs (e.g. back to default of 16384).  Note that client batch size times 512 must be smaller or equal to max batch tokens.
+where passing `--hf-api-token=$HUGGING_FACE_HUB_TOKEN` is only required if the model is private.
+
+Use [different tags](https://github.com/huggingface/text-embeddings-inference?tab=readme-ov-file#docker-images) for Turing, H100, or CPU etc.
+
+| Architecture                        | Image                                                                   |
+|-------------------------------------|-------------------------------------------------------------------------|
+| CPU                                 | ghcr.io/huggingface/text-embeddings-inference:cpu-1.2                   |
+| Volta                               | NOT SUPPORTED                                                           |
+| Turing (T4, RTX 2000 series, ...)   | ghcr.io/huggingface/text-embeddings-inference:turing-1.2 (experimental) |
+| Ampere 80 (A100, A30)               | ghcr.io/huggingface/text-embeddings-inference:1.2                       |
+| Ampere 86 (A10, A40, ...)           | ghcr.io/huggingface/text-embeddings-inference:86-1.2                    |
+| Ada Lovelace (RTX 4000 series, ...) | ghcr.io/huggingface/text-embeddings-inference:89-1.2                    |
+| Hopper (H100)                       | ghcr.io/huggingface/text-embeddings-inference:hopper-1.2 (experimental) |
+
+Adjust `--max-batch-tokens` to smaller for smaller GPUs (e.g. back to default of 16384).  Note that client batch size times 512 must be smaller or equal to max batch tokens.
 
 Then for h2oGPT ensure pass:
 ```bash
@@ -892,6 +932,171 @@ python --base_model=HuggingFaceH4/zephyr-7b-beta --score_model=None \
 --image_gpu_ids="[0,1,2]"
 ```
 
+### Deploy CogVLM OpenAI server
+
+```bash
+conda create -n cogvlm2 -y
+conda activate cogvlm2
+conda install python=3.10 -y
+pip install -r openai_server/cogvlm2_server/requirements.txt
+```
+
+```bash
+HOST=0.0.0.0 PORT=30030 CUDA_VISIBLE_DEVICES=7 python openai_server/cogvlm2_server/cogvlm2.py &> cogvlm2.log &
+disown %1
+```
+
+For h2oGPT, run:
+```bash
+python generate.py --base_model=THUDM/cogvlm2-llama3-chat-19B --inference_server='vllm_chat:http://0.0.0.0:30030/v1'
+```
+where by using `vllm_chat` we trigger use of the OpenAI chat like API for InternalVL models, using the GPT-4V like API.
+
+### LMDeploy for InternVL-Chat-V1.5 or LLaVa 1.5 or 1.6 (Next) vision models
+
+Make the file `Dockerfile.internalvl`:
+```text
+FROM openmmlab/lmdeploy:latest
+
+RUN apt-get update && apt-get install -y python3 python3-pip git
+
+WORKDIR /app
+
+RUN pip3 install --upgrade pip
+RUN pip3 install timm
+RUN pip3 install git+https://github.com/haotian-liu/LLaVA.git --no-deps
+
+COPY . .
+
+CMD ["lmdeploy", "serve", "api_server", "OpenGVLab/InternVL-Chat-V1-5"]
+```
+then run:
+```bash
+docker build - < Dockerfile.internalvl -t internalvl
+```
+then to launch server run:
+```bash
+docker run -d --runtime nvidia --gpus '"device=0"' \
+    -v ~/.cache/huggingface:/root/.cache/huggingface \
+    --env "HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN" \
+    -p 23333:23333 \
+    --ipc=host \
+    internalvl \
+    lmdeploy serve api_server OpenGVLab/InternVL-Chat-V1-5
+```
+once it is up normally, you can keep it up against crashes by adding `--restart=always`.
+
+Check that it's working:
+```python
+from openai import OpenAI
+
+client = OpenAI(api_key='EMPTY', base_url='http://0.0.0.0:23333/v1')
+model_name = client.models.list().data[0].id
+response = client.chat.completions.create(
+    model=model_name,
+    messages=[{
+        'role':
+        'user',
+        'content': [{
+            'type': 'text',
+            'text': 'Describe the image please',
+        }, {
+            'type': 'image_url',
+            'image_url': {
+                'url':
+                'https://raw.githubusercontent.com/open-mmlab/mmdeploy/main/tests/data/tiger.jpeg',
+            },
+        }],
+    }],
+    temperature=0.8,
+    top_p=0.8)
+print(response)
+```
+
+For h2oGPT, run:
+```bash
+python generate.py --base_model=OpenGVLab/InternVL-Chat-V1-5 --inference_server='vllm_chat:http://0.0.0.0:23333/v1'
+```
+where by using `vllm_chat` we trigger use of the OpenAI chat like API for InternalVL models, using the GPT-4V like API.
+
+### SGLang for LLaVA 1.5 and 1.6 (Next) vision models
+
+For fast and reliable vision model support, one can use SGLang instead of the server-worker-gradio setup described [below](#llava-vision-models).  See [SGLang](https://github.com/sgl-project/sglang) and see also [LLaVa-Next](https://github.com/LLaVA-VL/LLaVA-NeXT) and [LLaVa Next Blog](https://llava-vl.github.io/blog/2024-05-10-llava-next-stronger-llms/).
+
+Example models:
+* Model: https://huggingface.co/lmms-lab/llava-next-110b Tokenizer: https://huggingface.co/lmms-lab/llavanext-qwen-tokenizer Usage: https://github.com/sgl-project/sglang/blob/main/examples/usage/llava/http_qwen_llava_test.py
+* Model: https://huggingface.co/lmms-lab/llava-next-72b Tokenizer: https://huggingface.co/lmms-lab/llavanext-qwen-tokenizer Usage: https://github.com/sgl-project/sglang/blob/main/examples/usage/llava/http_qwen_llava_test.py
+* Model: https://huggingface.co/lmms-lab/llama3-llava-next-8b Tokenizer: https://huggingface.co/lmms-lab/llama3-llava-next-8b-tokenizer Usage: https://github.com/sgl-project/sglang/blob/main/examples/usage/llava/http_llama3_llava_test.py
+
+To setup, in a separate env to h2oGPT:
+```bash
+conda create -n sglang python=3.10 -y
+conda activate sglang
+
+git clone https://github.com/sgl-project/sglang.git
+cd sglang/python
+pip install -e ".[all]"
+```
+Note, for llama3 8b model, 0.1.16 version of install via pypi as `pip install "sglang[all]"` is sufficient, but for qwen need 0.1.17 or main as above.
+Then run:
+```bash
+export CUDA_VISIBLE_DEVICES=0
+python -m sglang.launch_server --model-path lmms-lab/llama3-llava-next-8b --tokenizer-path lmms-lab/llama3-llava-next-8b-tokenizer --port=30000 --host="0.0.0.0" --tp-size=1 --random-seed=1234 --context-length=8192
+```
+To use the API, include the header X-API-Key, e.g. with curl:
+```bash
+curl http://0.0.0.0:30000/get_model_info -H 'X-API-Key: XXXXXXXXX' -v
+```
+
+For h2oGPT run:
+```bash
+python --trust-remote-code --inference_server=sglang:conv_llava_llama_3:http://0.0.0.0:30000 --base_model=lmms-lab/llama3-llava-next-8b --prompt_type=llama3 &> 8b.log &
+disown %1
+```
+choose your IP if remote instead of `0.0.0.0` and use whatever port was mapped from `30000` to public port, e.g. `80`.
+
+For Yi 34B:
+```bash
+export CUDA_VISIBLE_DEVICES="0,1"
+python -m sglang.launch_server --model-path liuhaotian/llava-v1.6-34b --tokenizer-path liuhaotian/llava-v1.6-34b-tokenizer --port=30020 --host="0.0.0.0" --tp-size=1 --random-seed=1234 --context-length=4096 &> 34b.log &
+disown %1
+```
+and for h2oGPT:
+```bash
+python --trust-remote-code --inference_server=sglang:conv_chatml_direct:http://0.0.0.0:30000 --base_model=liuhaotian/llava-v1.6-34b --prompt_type=yi
+```
+
+For Qwen 72B:
+```bash
+export CUDA_VISIBLE_DEVICES="0,1,2,3"
+python -m sglang.launch_server --model-path lmms-lab/llava-next-72b --tokenizer-path lmms-lab/llavanext-qwen-tokenizer --port=30010 --host="0.0.0.0" --tp-size=4 --random-seed=1234 --context-length=32768 &> 72b.log &
+disown %1
+```
+and for h2oGPT:
+```bash
+python --trust-remote-code --inference_server=sglang:conv_qwen:http://0.0.0.0:30000 --base_model=lmms-lab/llava-next-72b --prompt_type=qwen
+```
+
+Or Qwen 110B:
+```bash
+export CUDA_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+python -m sglang.launch_server --model-path lmms-lab/llava-next-110b --tokenizer-path lmms-lab/llavanext-qwen-tokenizer --port=30010 --host="0.0.0.0" --tp-size=4 --random-seed=1234 --context-length=32768 &> 110b.log &
+disown %1
+```
+and for h2oGPT:
+```bash
+python --trust-remote-code --inference_server=sglang:conv_qwen:http://0.0.0.0:30000 --base_model=lmms-lab/llava-next-110b --prompt_type=qwen
+```
+
+For text, SGLang supports [OpenAI API](https://github.com/sgl-project/sglang?tab=readme-ov-file#using-openai-models) which is what the `--prompt_type` above is used for.  Otherwise h2oGPT uses http requests to talk to the SGLang server.
+
+For h2oGPT, the llava wheel was built like:
+```bash
+pip wheel git+https://github.com/LLaVA-VL/LLaVA-NeXT.git
+```
+producing `llava-1.7.0.dev0-py3-none-any.whl`, and this package is required for h2oGPT to use SGLang LLaVa-Next vision models.
+
+
 ### LLaVa Vision Models
 
 https://github.com/haotian-liu/LLaVA
@@ -997,13 +1202,14 @@ for example image `models/llava.png`.
 Run TGI server:
 ```
 docker run -d --gpus '"device=0"' \
+--restart=always \
 --shm-size 12g \
 -v $HOME/.cache/huggingface/hub/:/data \
 -p 5000:80 \
 --name idefics28b \
 ghcr.io/huggingface/text-generation-inference:2.0.3 \
 --model-id HuggingFaceM4/idefics2-8b --trust-remote-code --max-stop-sequences=6 \
---max-batch-prefill-tokens=32768 --max-input-length 32768 --max-total-tokens 66560 \
+--max-batch-prefill-tokens=32768 --max-input-length 4096 --max-total-tokens 8192 \
 --num-shard 1
 ```
 
@@ -2538,7 +2744,7 @@ pip install gradio==3.50.1
 CUDA error: an illegal memory access was encountered
 ```
 
-With upgrade to llama_cpp_python 0.2.56 for faster performance and other bug fixes, thread safety is worse.  So cannot do audio streaming + GGUF streaming at same time.  See: https://github.com/ggerganov/llama.cpp/issues/3960.
+With upgrade to llama_cpp_python 0.2.76 for faster performance and other bug fixes, thread safety is worse.  So cannot do audio streaming + GGUF streaming at same time.  See: https://github.com/ggerganov/llama.cpp/issues/3960.
 
 A temporary workaround is present in h2oGPT, whereby the XTTS model (not the Microsoft TTS model) and llama.cpp models are not used at the same time. This leads to more delays in streaming for text + audio, but not too bad a result.
 
@@ -2546,7 +2752,7 @@ Other workarounds:
 
 * Workaround 1: Use inference server like oLLaMa, vLLM, gradio inference server, etc.  as described [below](FAQ.md#running-ollama-vs-h2ogpt-as-inference-server).
 
-* Workaround 2: Follow normal directions for installation, but replace 0.2.56 with 0.2.26, e.g. for CUDA with Linux:
+* Workaround 2: Follow normal directions for installation, but replace 0.2.76 with 0.2.26, e.g. for CUDA with Linux:
     ```bash
     pip uninstall llama_cpp_python llama_cpp_python_cuda -y
     export LLAMA_CUBLAS=1
@@ -2554,4 +2760,4 @@ Other workarounds:
     export FORCE_CMAKE=1
     pip install llama_cpp_python==0.2.26 --no-cache-dir
     ```
-    However, 0.2.26 runs about 16 tokens/sec on 3090Ti on i9 while 0.2.56 runs at 65 tokens/sec for exact same model and prompt.
+    However, 0.2.26 runs about 16 tokens/sec on 3090Ti on i9 while 0.2.76 runs at 65 tokens/sec for exact same model and prompt.

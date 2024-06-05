@@ -79,7 +79,8 @@ from enums import DocumentSubset, LangChainMode, no_lora_str, model_token_mappin
     langchain_modes0, langchain_mode_types0, langchain_mode_paths0, \
     groq_mapping_outputs, llava_num_max, response_formats, noop_prompt_type, unknown_prompt_type, \
     json_object_prompt0, json_object_prompt_simpler0, json_code_prompt0, user_prompt_for_fake_system_prompt0, \
-    json_schema_instruction0, json_code_prompt_if_no_schema0, my_db_state0, empty_prompt_type
+    json_schema_instruction0, json_code_prompt_if_no_schema0, my_db_state0, empty_prompt_type, is_gradio_vision_model, \
+    is_json_model
 
 from loaders import get_loaders
 from utils import set_seed, clear_torch_cache, NullContext, wrapped_partial, EThread, get_githash, \
@@ -102,7 +103,7 @@ from transformers import GenerationConfig, AutoModel, TextIteratorStreamer, Auto
 
 from prompter import Prompter, inv_prompt_type_to_model_lower, non_hf_types, PromptType, get_prompt, generate_prompt, \
     openai_gpts, get_vllm_extra_dict, anthropic_gpts, google_gpts, mistralai_gpts, groq_gpts, \
-    gradio_to_llm, history_for_llm, is_gradio_vision_model, is_json_model, apply_chat_template, is_vision_model, \
+    gradio_to_llm, history_for_llm, apply_chat_template, \
     prompt_type_to_model_name
 from stopping import get_stopping
 from prompter_utils import get_use_chat_template
@@ -1551,7 +1552,7 @@ def main(
     # allow set token directly
     if not use_auth_token:
         use_auth_token = os.environ.get("HUGGING_FACE_HUB_TOKEN", use_auth_token)
-    if isinstance(use_auth_token, str) and use_auth_token and 'HUGGING_FACE_HUB_TOKEN' not in os.environ:
+    if isinstance(use_auth_token, str) and use_auth_token:
         os.environ['HUGGING_FACE_HUB_TOKEN'] = use_auth_token
     allow_upload_to_user_data = bool(
         int(os.environ.get("allow_upload_to_user_data", str(int(allow_upload_to_user_data)))))
@@ -1886,6 +1887,8 @@ def main(
         url_loaders_options0, url_loaders_options = lg_to_gr(**locals().copy())
     jq_schema0 = jq_schema
     extract_frames0 = extract_frames
+    guided_whitespace_pattern0 = guided_whitespace_pattern
+    metadata_in_context0 = metadata_in_context
     # transcribe
     image_audio_loaders = image_audio_loaders_options0
     pdf_loaders = pdf_loaders_options0
@@ -2237,10 +2240,10 @@ def main(
     # get default model(s)
     model_states = []
     model_state_base0 = dict(base_model=base_model, base_model0=base_model0,
-                       tokenizer_base_model=tokenizer_base_model, lora_weights=lora_weights,
-                       inference_server=inference_server, prompt_type=prompt_type, prompt_dict=prompt_dict,
-                       display_name=base_model,
-                       visible_models=None, h2ogpt_key=None)
+                             tokenizer_base_model=tokenizer_base_model, lora_weights=lora_weights,
+                             inference_server=inference_server, prompt_type=prompt_type, prompt_dict=prompt_dict,
+                             display_name=base_model,
+                             visible_models=None, h2ogpt_key=None)
     model_state_base0.update(other_model_state_defaults)
     # for allowing rest of eval_func_param_names.  We don't want to force CLI values always by default
     for k in eval_func_param_names:
@@ -2249,7 +2252,7 @@ def main(
 
     model_list = [model_state_base0]
     model_list0 = copy.deepcopy(model_list)  # just strings, safe to deepcopy
-    model_state0 = model_state_none.copy()
+    model_state0 = copy.deepcopy(model_state_none)
     assert len(model_state_none) == len(model_state0)
     if model_lock:
         model_list = model_lock
@@ -2270,9 +2273,10 @@ def main(
         model_dict['prompt_type'] = model_dict.get('prompt_type',
                                                    model_list0[0]['prompt_type'])  # don't use mutated value
         # rest of generic defaults
-        for k in model_list0[0]:
+        new_model_dict0 = copy.deepcopy(model_list0[0])
+        for k in new_model_dict0:
             if k not in model_dict:
-                model_dict[k] = model_list0[0][k]
+                model_dict[k] = new_model_dict0[k]
         # make so don't have to pass dict in dict so more like CLI for these options
         inner_dict_keys = ['model_path_llama', 'model_name_gptj', 'model_name_gpt4all_llama',
                            'model_name_exllama_if_no_config']
@@ -3832,10 +3836,14 @@ def get_score_model(score_model: str = None,
 
 
 def evaluate_fake(*args, **kwargs):
-    yield dict(response=invalid_key_msg, sources=[],
+    if kwargs.get('langchain_action', LangChainAction.QUERY.value) == LangChainAction.EXTRACT.value:
+        response = [invalid_key_msg]
+    else:
+        response = invalid_key_msg
+    yield dict(response=response, sources=[],
                save_dict=dict(prompt='INVALID', extra_dict=dict(num_prompt_tokens=0, base_model='')),
-               llm_answers=dict(response_raw=invalid_key_msg), response_no_refs=invalid_key_msg,
-               sources_str='', audio=None, prompt_raw='INVALID')
+               llm_answers=dict(response_raw=response), response_no_refs=response,
+               sources_str='', audio=None, prompt_raw='INVALID', error=invalid_key_msg)
     return
 
 
@@ -4021,6 +4029,8 @@ def evaluate(
         url_loaders_options0=None,
         jq_schema0=None,
         extract_frames0=None,
+        guided_whitespace_pattern0=None,
+        metadata_in_context0=None,
         keep_sources_in_context=None,
         gradio_errors_to_chatbot=None,
         allow_chat_system_prompt=None,
@@ -4067,9 +4077,14 @@ def evaluate(
         extract_frames = extract_frames0
     if seed is None:
         seed = 0
-    if guided_whitespace_pattern == '':
-        # translate empty string to None
-        guided_whitespace_pattern = None
+    if guided_whitespace_pattern is None:
+        if guided_whitespace_pattern0:
+            guided_whitespace_pattern = guided_whitespace_pattern0
+        if guided_whitespace_pattern == '':
+            # translate empty string to None
+            guided_whitespace_pattern = None
+    if metadata_in_context is None:
+        metadata_in_context = metadata_in_context0
 
     assert response_format in response_formats, "Invalid response_format: %s, must be in %s" % (
         response_format, response_formats)
@@ -4318,6 +4333,7 @@ def evaluate(
 
     # don't repeat prompting if doing gradio server since inner prompting will handle
     json_vllm = False
+    json_schema_type = None
     if not h2ogpt_gradio_server and \
             response_format in ['json_object', 'json_code']:
 
@@ -4344,6 +4360,18 @@ def evaluate(
             guided_json_properties = guided_json_properties['properties']
         # back to string, so e.g. do not get ' in prompt but " for quotes etc.  gemma messes that up.
         guided_json_properties_json = json.dumps(guided_json_properties)
+        if guided_json_properties_json.startswith('{'):
+            json_schema_type = 'object'
+        elif guided_json_properties_json.startswith('['):
+            json_schema_type = 'array'
+        elif guided_json_properties_json.startswith('"'):
+            json_schema_type = 'string'
+        elif guided_json_properties_json.startswith('true') or guided_json_properties_json.startswith('false'):
+            json_schema_type = 'boolean'
+        elif guided_json_properties_json.startswith('null'):
+            json_schema_type = 'null'
+        elif guided_json_properties_json.isdigit():
+            json_schema_type = 'number'
 
         schema_instruction = json_schema_instruction.format(properties_schema=guided_json_properties_json)
         json_vllm = chosen_model_state['json_vllm']
@@ -4384,6 +4412,16 @@ def evaluate(
                 pre_instruction = json_code_prompt + json_code_prompt_if_no_schema
         # ignore these, make no sense for JSON mode
         system_prompt = ''  # can mess up the model, e.g. 70b
+        if pre_instruction:
+            if True or base_model and base_model in anthropic_mapping:
+                # NOTE: enabled generally for now, seems to help generally
+                pre_instruction = '\n<response_format_instructions>\n' + \
+                                  pre_instruction + \
+                                  '\n</response_format_instructions>\n\n'
+            else:
+                pre_instruction = 'Begin response format instructions:\n###\n' + \
+                                  pre_instruction + \
+                                  '\n###\nEnd response format instructions\n\n'
         if instruction:
             # FIXME: don't embed instruction with extra JSON stuff
             instruction = pre_instruction + '\n\n' + instruction
@@ -4655,7 +4693,7 @@ def evaluate(
             response = r['response']
             if response_format in ['json_object', 'json_code']:
                 response_raw = response
-                response = get_json(response)
+                response = get_json(response, json_schema_type=json_schema_type)
             sources = r['sources']
             num_prompt_tokens = r['num_prompt_tokens']
             llm_answers = r['llm_answers']
@@ -4792,7 +4830,7 @@ def evaluate(
                         response = prompter.get_response(prompt + text, prompt=prompt,
                                                          sanitize_bot_response=sanitize_bot_response)
                         if response_format in ['json_object', 'json_code']:
-                            response = get_json(response)
+                            response = get_json(response, json_schema_type=json_schema_type)
                     else:
                         collected_events = []
                         tgen0 = time.time()
@@ -4805,7 +4843,7 @@ def evaluate(
                                                                  sanitize_bot_response=sanitize_bot_response)
                                 if response_format in ['json_object', 'json_code']:
                                     response_raw = response
-                                    response = get_json(response)
+                                    response = get_json(response, json_schema_type=json_schema_type)
                                 yield dict(response=response, sources=sources, save_dict={},
                                            llm_answers=dict(response_raw=response_raw),
                                            response_no_refs=response, sources_str='', prompt_raw='')
@@ -4841,7 +4879,7 @@ def evaluate(
                         messages0.append({'role': 'user', 'content': prompt})
 
                     if response_format == 'json_object' and inf_type == 'openai_chat':
-                        other_dict.update(dict(type=response_format))
+                        other_dict.update(dict(response_format=dict(type=response_format)))
 
                     # JSON: https://platform.openai.com/docs/guides/text-generation/json-mode
                     if inf_type == 'vllm_chat':
@@ -4875,7 +4913,7 @@ def evaluate(
                                                          sanitize_bot_response=sanitize_bot_response)
                         if response_format in ['json_object', 'json_code']:
                             response_raw = response
-                            response = get_json(response)
+                            response = get_json(response, json_schema_type=json_schema_type)
                     else:
                         # NOTE: If some stream failure like wrong model, don't get back response and no failure
                         tgen0 = time.time()
@@ -4887,7 +4925,7 @@ def evaluate(
                                                                  sanitize_bot_response=sanitize_bot_response)
                                 if response_format in ['json_object', 'json_code']:
                                     response_raw = response
-                                    response = get_json(response)
+                                    response = get_json(response, json_schema_type=json_schema_type)
                                 yield dict(response=response, sources=sources, save_dict={},
                                            llm_answers=dict(response_raw=response_raw),
                                            response_no_refs=response, sources_str='', prompt_raw='')
@@ -4962,7 +5000,7 @@ def evaluate(
 
                     if response_format in ['json_object', 'json_code']:
                         response_raw = response
-                        response = get_json(response)
+                        response = get_json(response, json_schema_type=json_schema_type)
                     yield dict(response=response, sources=[], save_dict={}, error='',
                                llm_answers=dict(response_raw=response_raw),
                                response_no_refs=response, sources_str='', prompt_raw='')
@@ -4972,7 +5010,7 @@ def evaluate(
                     for response1 in get_llava_stream(**llava_kwargs):
                         if response_format in ['json_object', 'json_code']:
                             response_raw = response1
-                            response = get_json(response1)
+                            response = get_json(response1, json_schema_type=json_schema_type)
                         else:
                             response = response1
                         yield dict(response=response, sources=[], save_dict={}, error='',
@@ -5156,7 +5194,7 @@ def evaluate(
                                 response = res_dict['response']
                                 if response_format in ['json_object', 'json_code']:
                                     response_raw = response
-                                    response = get_json(response)
+                                    response = get_json(response, json_schema_type=json_schema_type)
                                     res_dict['response'] = response
                                     res_dict['llm_answers'] = res_dict.get('llm_answers', {})
                                     res_dict['llm_answers']['response_raw'] = response_raw
@@ -5204,7 +5242,7 @@ def evaluate(
                                                          sanitize_bot_response=sanitize_bot_response)
                         if response_format in ['json_object', 'json_code']:
                             response_raw = response
-                            response = get_json(response)
+                            response = get_json(response, json_schema_type=json_schema_type)
                     else:
                         tgen0 = time.time()
                         text = ""
@@ -5218,7 +5256,7 @@ def evaluate(
                                 sources = []
                                 if response_format in ['json_object', 'json_code']:
                                     response_raw = response
-                                    response = get_json(response)
+                                    response = get_json(response, json_schema_type=json_schema_type)
                                 yield dict(response=response, sources=sources, save_dict={},
                                            llm_answers=dict(response_raw=response_raw),
                                            response_no_refs=response, sources_str='', prompt_raw='')
@@ -5413,7 +5451,7 @@ def evaluate(
                                                              sanitize_bot_response=sanitize_bot_response)
                             if response_format in ['json_object', 'json_code']:
                                 response_raw = response
-                                response = get_json(response)
+                                response = get_json(response, json_schema_type=json_schema_type)
                             ret = dict(response=response, sources=sources, save_dict=save_dict,
                                        llm_answers=dict(response_raw=response_raw),
                                        response_no_refs=response, sources_str='', prompt_raw=prompt)
@@ -5459,7 +5497,7 @@ def evaluate(
                                                      sanitize_bot_response=sanitize_bot_response)
                     if response_format in ['json_object', 'json_code']:
                         response_raw = response
-                        response = get_json(response)
+                        response = get_json(response, json_schema_type=json_schema_type)
                     if outputs and len(outputs) >= 1:
                         decoded_output = prompt + outputs[0]
 
@@ -6128,7 +6166,7 @@ def history_to_context(history, langchain_mode=None,
                        gradio_errors_to_chatbot=None,
                        min_max_new_tokens=512):
     """
-    consumes all history up to (but not including) latest history item that is presumed to be an [instruction, None] pair
+    Consumes all history up to (but not including) the latest history item that is presumed to be an [instruction, None] pair.
     :param history:
     :param langchain_mode:
     :param add_chat_history_to_context:
@@ -6143,34 +6181,43 @@ def history_to_context(history, langchain_mode=None,
     :return:
     """
     history = merge_chat_conversation_history(chat_conversation, history)
+    len_history = len(history)
 
-    if len(history) >= 1 and len(history[-1]) >= 2 and not history[-1][1]:
-        len_history = len(history) - 1
-    else:
-        # full history
-        len_history = len(history)
-
-    # ensure output will be unique to models
+    # Ensure output will be unique to models
     _, _, _, max_prompt_length = get_cutoffs(memory_restriction_level,
                                              for_context=True, model_max_length=model_max_length,
                                              min_max_new_tokens=min_max_new_tokens)
+
+    # Account for the system prompt length
+    if system_prompt:
+        system_prompt_length = len(system_prompt)
+        max_prompt_length -= system_prompt_length
+
     context1 = ''
+    final_history = []
+
     if max_prompt_length is not None and add_chat_history_to_context:
-        context1 = ''
-        # - 1 below because current instruction already in history from user()
-        for histi in range(0, len_history):
+        # Compute terminate_response, chat_sep, chat_turn_sep once
+        _, pre_response, terminate_response, chat_sep, chat_turn_sep = \
+            generate_prompt({}, prompt_type, prompt_dict,
+                            reduced=True,
+                            making_context=True,
+                            system_prompt=system_prompt,
+                            histi=-1)
+
+        for histi in range(len_history - 1, -1, -1):  # Iterate in reverse order
             user = history[histi][0]
             bot = history[histi][1]
 
             if user is None:
-                # used to indicate was error or something similar put into chatbot stream
+                # Used to indicate was error or something similar put into chatbot stream
                 continue
 
             instruction = gradio_to_llm(user, bot=False)
-            output = gradio_to_llm(bot, bot=True)
+            output = gradio_to_llm(bot, bot=True) if bot is not None else ''
 
             data_point = dict(instruction=instruction, input='', output=output)
-            prompt, pre_response, terminate_response, chat_sep, chat_turn_sep = \
+            prompt, _, _, _, _ = \
                 generate_prompt(data_point,
                                 prompt_type,
                                 prompt_dict,
@@ -6182,21 +6229,53 @@ def history_to_context(history, langchain_mode=None,
             prompt = prompt.replace('<br>', chat_turn_sep)
             if not prompt.endswith(chat_turn_sep):
                 prompt += chat_turn_sep
-            # most recent first, add older if can
-            # only include desired chat history
-            if len(prompt + context1) > max_prompt_length:
-                break
-            context1 += prompt
 
-        _, pre_response, terminate_response, chat_sep, chat_turn_sep = \
-            generate_prompt({}, prompt_type, prompt_dict,
-                            reduced=True,
-                            making_context=True,
-                            system_prompt=system_prompt,
-                            histi=-1)
+            if len(prompt + context1) > max_prompt_length:
+                remaining_length = max_prompt_length - len(context1)
+                if len(instruction) > len(output):
+                    if len(output) >= remaining_length:
+                        truncated_instruction = ''
+                        truncated_output = output[:remaining_length]
+                    else:
+                        truncated_output = output
+                        truncated_instruction = instruction[:remaining_length - len(output)]
+                else:
+                    if len(instruction) >= remaining_length:
+                        truncated_instruction = instruction[:remaining_length]
+                        truncated_output = ''
+                    else:
+                        truncated_instruction = instruction
+                        truncated_output = output[:remaining_length - len(instruction)]
+
+                data_point = dict(instruction=truncated_instruction, input='', output=truncated_output)
+                truncated_prompt, _, _, _, _ = \
+                    generate_prompt(data_point,
+                                    prompt_type,
+                                    prompt_dict,
+                                    reduced=True,
+                                    making_context=True,
+                                    system_prompt=system_prompt,
+                                    histi=histi)
+                truncated_prompt = remove_refs(truncated_prompt, keep_sources_in_context, langchain_mode, hyde_level,
+                                               gradio_errors_to_chatbot)
+                truncated_prompt = truncated_prompt.replace('<br>', chat_turn_sep)
+                if not truncated_prompt.endswith(chat_turn_sep):
+                    truncated_prompt += chat_turn_sep
+
+                if bot is not None:
+                    context1 = truncated_prompt + context1
+
+                final_history.insert(0, (truncated_instruction, truncated_output))
+                break
+
+            if bot is not None:
+                context1 = prompt + context1
+            final_history.insert(0, (instruction, output))
+
         if context1 and not context1.endswith(chat_turn_sep):
-            context1 += chat_turn_sep  # ensure if terminates abruptly, then human continues on next line
-    return context1
+            context1 += chat_turn_sep  # Ensure if terminates abruptly, then human continues on next line
+
+    return context1, final_history
 
 
 def get_relaxed_max_new_tokens(prompt, tokenizer=None, max_new_tokens=None, max_new_tokens0=None):
@@ -6240,6 +6319,11 @@ def get_limited_prompt(instruction,
                        attention_sinks=False,
                        doing_grounding=False,
                        ):
+    """
+    Take instruction (estimated_instruction for counting token purposes), iinput, system_prompt, context, chat_conversation, text_context_list as inputs
+    and return a prompt and other items accounting for (if required) a balanced truncation of these outputs to avoid going over the token limits
+    """
+
     if gradio_server or not inference_server:
         # can listen to truncation_generation
         pass
@@ -6368,13 +6452,17 @@ def get_limited_prompt(instruction,
                                                                                      max_prompt_length=int(
                                                                                          max_input_tokens * 0.9))
     if use_chat_template:
+        # first limit history
+        context2_fake, history = history_to_context_func(history)
+        # now apply chat template
         context2 = apply_chat_template(instruction, system_prompt_to_use, history, tokenizer,
                                        user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt)
         iinput = ''
         context1 = ''
         num_context1_tokens = 0
     else:
-        context2 = history_to_context_func(history)
+        # this also limits history
+        context2, history = history_to_context_func(history)
 
     context2_trial, num_context2_tokens = H2OTextGenerationPipeline.limit_prompt(context2, tokenizer,
                                                                                  max_prompt_length=max_input_tokens)
@@ -6465,7 +6553,7 @@ def get_limited_prompt(instruction,
                     context2 = apply_chat_template(instruction, system_prompt_to_use, history_to_use, tokenizer,
                                                    user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt)
                 else:
-                    context2 = history_to_context_func(history_to_use)
+                    context2, history_to_use = history_to_context_func(history_to_use)
 
                 num_context2_tokens = get_token_count(context2, tokenizer)
                 diff1 = non_doc_max_length - (
@@ -6495,7 +6583,7 @@ def get_limited_prompt(instruction,
                 context2 = apply_chat_template(instruction, system_prompt_to_use, history_to_use_final, tokenizer,
                                                user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt)
             else:
-                context2 = history_to_context_func(history_to_use_final)
+                context2, history_to_use_final = history_to_context_func(history_to_use_final)
 
             num_context2_tokens = get_token_count(context2, tokenizer)
             if verbose:

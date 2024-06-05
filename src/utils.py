@@ -2069,7 +2069,8 @@ def get_token_count(x, tokenizer, token_count_fun=None, add_special_tokens=True)
             raise RuntimeError("Cannot handle tokens: %s" % tokens)
     elif token_count_fun is not None:
         assert callable(token_count_fun)
-        other_kwargs = dict(add_special_tokens=add_special_tokens) if hasattr(token_count_fun, 'add_special_tokens') else {}
+        other_kwargs = dict(add_special_tokens=add_special_tokens) if hasattr(token_count_fun,
+                                                                              'add_special_tokens') else {}
         n_tokens = token_count_fun(x, **other_kwargs)
     else:
         tokenizer = FakeTokenizer()
@@ -2253,27 +2254,102 @@ def get_code_blocks(response):
     return pattern.findall(response)
 
 
-def get_json(response, fixup=True):
+def get_json(response, fixup=True, json_schema_type=None):
     is_list = isinstance(response, list)
     if not is_list:
         response = [response]
-    response_new = [_get_json(x, fixup=fixup) for x in response]
+    response_new = [_get_json(x, fixup=fixup, json_schema_type=json_schema_type) for x in response]
     if not is_list:
         response_new = response_new[0]
     return response_new
 
 
-def _get_json(response, fixup=True):
-    # First, try to extract code block content. If content is found (not an empty string), return None (or possibly an empty string as per updated logic)
+def extract_values(data):
+    if isinstance(data, dict):
+        if 'type' in data and 'value' in data:
+            return data['value']
+        elif 'items' in data:
+            return [extract_values(item) for item in data['items']]
+        elif 'properties' in data:
+            return {key: extract_values(value) for key, value in data['properties'].items()}
+        elif 'enum' in data:
+            return data['enum']  # return the enum values
+        elif 'const' in data:
+            return data['const']  # return the const value
+        elif 'oneOf' in data:
+            return [extract_values(item) for item in data['oneOf']]
+        elif 'anyOf' in data:
+            return [extract_values(item) for item in data['anyOf']]
+        elif 'allOf' in data:
+            return [extract_values(item) for item in data['allOf']]
+        else:
+            return {key: extract_values(value) for key, value in data.items()}
+    elif isinstance(data, list):
+        return [extract_values(item) for item in data]
+    else:
+        return data
+
+
+# Function to check if JSON contains schema information
+def contains_schema(data):
+    if isinstance(data, dict):
+        if 'type' in data and 'value' in data:
+            return True
+        for key, value in data.items():
+            if contains_schema(value):
+                return True
+    elif isinstance(data, list):
+        for item in data:
+            if contains_schema(item):
+                return True
+    return False
+
+
+# Main function to handle both schema and regular JSON
+def handle_json(data):
+    if contains_schema(data):
+        return extract_values(data)
+    else:
+        return data
+
+
+def repair_json_by_type(response, json_schema_type=None):
+    # WIP for later
+    if json_schema_type == 'object':
+        from json_repair import repair_json
+        response = repair_json(response)
+        try:
+            # assumes already dict
+            return json.dumps(handle_json(json.loads(response)))
+        except Exception as e:
+            print("Did not extract_values: %s" % str(e))
+            return response
+    else:
+        from json_repair import repair_json
+        return repair_json(response)
+
+
+def _get_json(response, fixup=True, json_schema_type=None):
+    if fixup:
+        # first rely upon json_repair package, handles code block extraction as well automatically
+        try:
+            response0 = repair_json_by_type(response, json_schema_type=json_schema_type)
+            if response0:
+                return response0
+        except Exception as e:
+            # FIXME: best effort, don't understand if package will hae issues
+            print("repair_json exception1: %s: %s" % (str(e), response))
+
+    # if json_repair fails, try to extract code block content
+    # sIf content is found (not an empty string), return None (or possibly an empty string as per updated logic)
     response0 = extract_code_block_content(response)
     if response0:
         if fixup:
-            from json_repair import repair_json
             try:
-                response0 = repair_json(response0)
+                response0 = repair_json_by_type(response0, json_schema_type=json_schema_type)
             except Exception as e:
                 # FIXME: best effort, don't understand if package will hae issues
-                print("repair_json exception1: %s: %s" % (str(e), response))
+                print("repair_json exception2: %s: %s" % (str(e), response))
         return response0
     # Next, check if the response looks like JSON, return it if so
     if looks_like_json(response):
@@ -2281,49 +2357,42 @@ def _get_json(response, fixup=True):
         if response.endswith('```'):
             response = response[:-3].strip()
         if fixup:
-            from json_repair import repair_json
             try:
-                response = repair_json(response)
+                response = repair_json_by_type(response, json_schema_type=json_schema_type)
             except Exception as e:
                 # FIXME: best effort, don't understand if package will hae issues
-                print("repair_json exception2: %s: %s" % (str(e), response))
+                print("repair_json exception3: %s: %s" % (str(e), response))
         return response
     # If it doesn't look like JSON, return an empty string as a default case
     return invalid_json_str
 
 
-# This pattern looks for the start of the text or any kind of newline followed by optional whitespace,
-# and then the code block delimiter (```).
-# It accounts for different newline characters and HTML line breaks.
-pattern_partial_codeblock = re.compile(r"(^|\n|\r|<br\s*/?>)\s*```")
+# Adjusted pattern to match code block content accurately
+pattern_extract_codeblock = re.compile(r"```(?:[a-zA-Z]*)\s*(.*?)(```|$)", re.DOTALL)
 
 
-def has_starting_code_block(text):
-    # Search the text for the pattern
-    if pattern_partial_codeblock.search(text):
-        return True
-    else:
-        return False
-
-
-pattern_extract_codeblock = re.compile(r"```[a-zA-Z]*\s*(.*?)(```|$)", re.DOTALL)
-
-
-# pattern_extract_codeblock = re.compile(r"```(?:[a-zA-Z]*\s*)(.*?)(?=```|$)", re.DOTALL)
+def preprocess_code_blocks(stream_content):
+    # Remove consecutive starting code block delimiters, but keep the inner content
+    stream_content = re.sub(r"```[a-zA-Z]*\n```[a-zA-Z]*", "```", stream_content)
+    # Remove consecutive ending code block delimiters
+    stream_content = re.sub(r"```\n```", "```", stream_content)
+    return stream_content
 
 
 def extract_code_block_content(stream_content):
-    # This pattern matches content starting from an opening code block delimiter (```)
-    # and captures everything after it until a closing delimiter or the end of string if no closing delimiter is found.
-    # Non-greedy matching is used to ensure it captures the earliest possible ending.
+    # Postprocess to handle nested or consecutive code block delimiters
+    stream_content = preprocess_code_blocks(stream_content)
 
     match = pattern_extract_codeblock.search(stream_content)
     if match:
-        # Returns the captured group which is the content of the code block.
-        # The .strip() is used to remove any leading or trailing whitespace that might be present.
         return match.group(1).strip()
     else:
         return ''
+
+
+def has_starting_code_block(text):
+    pattern_partial_codeblock = re.compile(r"(^|\n|\r|<br\s*/?>)\s*```")
+    return bool(pattern_partial_codeblock.search(text))
 
 
 def looks_like_json(text):
@@ -2381,9 +2450,9 @@ def get_vllm_version(openai_client, inference_server, verbose=False):
             else:
                 if verbose:
                     print(f"Failed to retrieve version, status code: {response.status_code}")
-        except requests.exceptions.Timeout:
-            # if times out, assume new for newer usage
-            vllm_version = '0.4.0.post1'
+        except (requests.exceptions.Timeout, requests.exceptions.JSONDecodeError):
+            # if times out, assume older version, with no JSON.  Or might not be real vllm
+            vllm_version = '0.3.0'
             print(f"vLLM Server version timeout, assuming: {vllm_version}")
     return vllm_version
 
@@ -2417,8 +2486,9 @@ def get_docs_tokens(tokenizer, text_context_list=[], max_input_tokens=None, docs
         text_context_list[0] = doc_content
         one_doc_size = len(doc_content)
         num_doc_tokens = get_token_count(doc_content + docs_joiner, tokenizer)
-        print("Unexpected large chunks and can't add to context, will add 1 anyways.  Tokens %s -> %s for max_input_tokens=%s" % (
-            tokens[0], new_tokens0, max_input_tokens), flush=True)
+        print(
+            "Unexpected large chunks and can't add to context, will add 1 anyways.  Tokens %s -> %s for max_input_tokens=%s" % (
+                tokens[0], new_tokens0, max_input_tokens), flush=True)
     return top_k_docs, one_doc_size, num_doc_tokens
 
 

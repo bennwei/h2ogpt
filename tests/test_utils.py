@@ -8,7 +8,7 @@ import pytest
 from tests.utils import wrap_test_forked
 from src.utils import get_list_or_str, read_popen_pipes, get_token_count, reverse_ucurve_list, undo_reverse_ucurve_list, \
     is_uuid4, has_starting_code_block, extract_code_block_content, looks_like_json, get_json, is_full_git_hash, \
-    deduplicate_names
+    deduplicate_names, handle_json
 from src.enums import invalid_json_str, user_prompt_for_fake_system_prompt0
 from src.prompter import apply_chat_template
 import subprocess as sp
@@ -414,8 +414,163 @@ Note that the `work history` array contains two objects, each with a `company`, 
     assert extracted_content == """{\n \"name\": \"John Doe\",\n \"email\": \"john.doe@example.com\",\n \"jobTitle\": \"Software Developer\",\n \"department\": \"Technology\",\n \"hireDate\": \"2020-01-01\",\n \"employeeId\": 123456,\n \"manager\": {\n \"name\": \"Jane Smith\",\n \"email\": \"jane.smith@example.com\",\n \"jobTitle\": \"Senior Software Developer\"\n },\n \"skills\": [\n \"Java\",\n \"Python\",\n \"JavaScript\",\n \"React\",\n \"Spring\"\n ],\n \"education\": {\n \"degree\": \"Bachelor's Degree\",\n \"field\": \"Computer Science\",\n \"institution\": \"Example University\",\n \"graduationYear\": 2018\n },\n \"awards\": [\n {\n \"awardName\": \"Best Developer of the Year\",\n \"year\": 2021\n },\n {\n \"awardName\": \"Most Valuable Team Player\",\n \"year\": 2020\n }\n ],\n \"performanceRatings\": {\n \"communication\": 4.5,\n \"teamwork\": 4.8,\n \"creativity\": 4.2,\n \"problem-solving\": 4.6,\n \"technical skills\": 4.7\n }\n}"""
 
 
+def test_partial_codeblock2():
+    example_1 = "```code block starts immediately"
+    example_2 = "\n    ```code block after newline and spaces"
+    example_3 = "<br>```code block after HTML line break"
+    example_4 = "This is a regular text without a code block."
+
+    assert has_starting_code_block(example_1)
+    assert has_starting_code_block(example_2)
+    assert has_starting_code_block(example_3)
+    assert not has_starting_code_block(example_4)
+
+
+def test_extract_code_block_content():
+    example_stream_1 = "```code block content here```more text"
+    example_stream_2 = "```code block content with no end yet..."
+    example_stream_3 = "```\ncode block content here\n```\nmore text"
+    example_stream_4 = "```\ncode block content \nwith no end yet..."
+    example_stream_5 = "\n ```\ncode block content here\n```\nmore text"
+    example_stream_6 = "\n ```\ncode block content \nwith no end yet..."
+    example_stream_7 = "more text"
+    example_stream_8 = """```markdown
+```json
+{
+  "Employee": {
+    "Name": "Henry",
+    "Title": "AI Scientist",
+    "Department": "AI",
+    "Location": "San Francisco",
+    "Contact": {
+      "Email": "henryai@gmail.com",
+      "Phone": "+1-234-567-8901"
+    },
+    "Profile": {
+      "Education": [
+        {
+          "Institution": "Stanford University",
+          "Degree": "Ph.D.",
+          "Field": "Computer Science"
+        },
+        {
+          "Institution": "University of California, Berkeley",
+          "Degree": "M.S.",
+          "Field": "Artificial Intelligence"
+        }
+      ],
+      "Experience": [
+        {
+          "Company": "Google",
+          "Role": "Senior AI Engineer",
+          "Duration": "5 years"
+        },
+        {
+          "Company": "Facebook",
+          "Role": "Principal AI Engineer",
+          "Duration": "3 years"
+        }
+      ],
+      "Skills": [
+        "Python",
+        "TensorFlow",
+        "PyTorch",
+        "Natural Language Processing",
+        "Machine Learning"
+      ],
+      "Languages": [
+        "English",
+        "French",
+        "Spanish"
+      ],
+      "Certifications": [
+        {
+          "Name": "Certified AI Professional",
+          "Issuing Body": "AI Professional Association"
+        },
+        {
+          "Name": "Advanced AI Course Certificate",
+          "Issuing Body": "AI Institute"
+        }
+      ]
+    }
+  }
+}
+```
+"""
+    assert extract_code_block_content(example_stream_1) == "block content here"
+    assert extract_code_block_content(example_stream_2) == "block content with no end yet..."
+    assert extract_code_block_content(example_stream_3) == "code block content here"
+    assert extract_code_block_content(example_stream_4) == "code block content \nwith no end yet..."
+    assert extract_code_block_content(example_stream_5) == "code block content here"
+    assert extract_code_block_content(example_stream_6) == "code block content \nwith no end yet..."
+    assert extract_code_block_content(example_stream_7) == ""
+    expected8 = """{
+  "Employee": {
+    "Name": "Henry",
+    "Title": "AI Scientist",
+    "Department": "AI",
+    "Location": "San Francisco",
+    "Contact": {
+      "Email": "henryai@gmail.com",
+      "Phone": "+1-234-567-8901"
+    },
+    "Profile": {
+      "Education": [
+        {
+          "Institution": "Stanford University",
+          "Degree": "Ph.D.",
+          "Field": "Computer Science"
+        },
+        {
+          "Institution": "University of California, Berkeley",
+          "Degree": "M.S.",
+          "Field": "Artificial Intelligence"
+        }
+      ],
+      "Experience": [
+        {
+          "Company": "Google",
+          "Role": "Senior AI Engineer",
+          "Duration": "5 years"
+        },
+        {
+          "Company": "Facebook",
+          "Role": "Principal AI Engineer",
+          "Duration": "3 years"
+        }
+      ],
+      "Skills": [
+        "Python",
+        "TensorFlow",
+        "PyTorch",
+        "Natural Language Processing",
+        "Machine Learning"
+      ],
+      "Languages": [
+        "English",
+        "French",
+        "Spanish"
+      ],
+      "Certifications": [
+        {
+          "Name": "Certified AI Professional",
+          "Issuing Body": "AI Professional Association"
+        },
+        {
+          "Name": "Advanced AI Course Certificate",
+          "Issuing Body": "AI Institute"
+        }
+      ]
+    }
+  }
+}"""
+    assert extract_code_block_content(example_stream_8) == expected8
+
+
+@pytest.mark.parametrize("method", ['repair_json', 'get_json'])
 @wrap_test_forked
-def test_repair_json():
+def test_repair_json(method):
     a = """{
     "Supplementary Leverage Ratio": [7.0, 5.8, 5.7],
     "Liquidity Metrics": {
@@ -454,7 +609,10 @@ def test_repair_json():
     for i in range(len(a)):
         text = a[:i]
         t0 = time.time()
-        good_json_string = repair_json(text)
+        if method == 'repair_json':
+            good_json_string = repair_json(text)
+        else:
+            good_json_string = get_json(text)
         if i > 50:
             assert len(good_json_string) > 5
         tdelta = time.time() - t0
@@ -463,8 +621,207 @@ def test_repair_json():
         json.loads(good_json_string)
 
 
+def test_json_repair_more():
+    response0 = """```markdown
+    ```json
+    {
+      "Employee": {
+        "Name": "Henry",
+        "Title": "AI Scientist",
+        "Department": "AI",
+        "Location": "San Francisco",
+        "Contact": {
+          "Email": "henryai@gmail.com",
+          "Phone": "+1-234-567-8901"
+        },
+        "Profile": {
+          "Education": [
+            {
+              "Institution": "Stanford University",
+              "Degree": "Ph.D.",
+              "Field": "Computer Science"
+            },
+            {
+              "Institution": "University of California, Berkeley",
+              "Degree": "M.S.",
+              "Field": "Artificial Intelligence"
+            }
+          ],
+          "Experience": [
+            {
+              "Company": "Google",
+              "Role": "Senior AI Engineer",
+              "Duration": "5 years"
+            },
+            {
+              "Company": "Facebook",
+              "Role": "Principal AI Engineer",
+              "Duration": "3 years"
+            }
+          ],
+          "Skills": [
+            "Python",
+            "TensorFlow",
+            "PyTorch",
+            "Natural Language Processing",
+            "Machine Learning"
+          ],
+          "Languages": [
+            "English",
+            "French",
+            "Spanish"
+          ],
+          "Certifications": [
+            {
+              "Name": "Certified AI Professional",
+              "Issuing Body": "AI Professional Association"
+            },
+            {
+              "Name": "Advanced AI Course Certificate",
+              "Issuing Body": "AI Institute"
+            }
+          ]
+        }
+      }
+    }
+    ```
+    """
+    from json_repair import repair_json
+    response = repair_json(response0)
+    assert response.startswith('{')
+
+    response0 = """  Here is an example employee profile in JSON format, with keys that are less than 64 characters and made of only alphanumerics, underscores, or hyphens:
+    ```json
+    {
+      "employee_id": 1234,
+      "name": "John Doe",
+      "email": "johndoe@example.com",
+      "job_title": "Software Engineer",
+      "department": "Engineering",
+      "hire_date": "2020-01-01",
+      "salary": 100000,
+      "manager_id": 5678
+    }
+    ```
+    In Markdown, you can display this JSON code block like this:
+    ```json
+    ```
+    {
+      "employee_id": 1234,
+      "name": "John Doe",
+      "email": "johndoe@example.com",
+      "job_title": "Software Engineer",
+      "department": "Engineering",
+      "hire_date": "2020-01-01",
+      "salary": 100000,
+      "manager_id": 5678
+    }
+    ```
+    This will display the JSON code block with proper formatting and highlighting.
+    """
+    from json_repair import repair_json
+    from src.utils import get_json
+    import json
+
+    response = repair_json(response0)
+    assert json.loads(response)['employee_id'] == 1234
+    print(response)
+
+    response = get_json(response0, json_schema_type='object')
+    assert json.loads(response)['employee_id'] == 1234
+    print(response)
+
+
 @wrap_test_forked
 def test_dedup():
     # Example usage:
     names_list = ['Alice', 'Bob', 'Alice', 'Charlie', 'Bob', 'Alice']
     assert deduplicate_names(names_list) == ['Alice', 'Bob', 'Alice_1', 'Charlie', 'Bob_1', 'Alice_2']
+
+
+# Test cases
+def test_handle_json_normal():
+    normal_json = {
+        "name": "Henry",
+        "age": 35,
+        "skills": ["AI", "Machine Learning", "Data Science"],
+        "workhistory": [
+            {"company": "TechCorp", "duration": "2015-2020", "position": "Senior AI Scientist"},
+            {"company": "AI Solutions", "duration": "2010-2015", "position": "AI Scientist"}
+        ]
+    }
+    assert handle_json(normal_json) == normal_json
+
+
+def test_handle_json_schema():
+    schema_json = {
+        "name": {"type": "string", "value": "Henry"},
+        "age": {"type": "integer", "value": 35},
+        "skills": {"type": "array", "items": [
+            {"type": "string", "value": "AI", "maxLength": 10},
+            {"type": "string", "value": "Machine Learning", "maxLength": 10},
+            {"type": "string", "value": "Data Science", "maxLength": 10}
+        ], "minItems": 3},
+        "workhistory": {"type": "array", "items": [
+            {"type": "object", "properties": {
+                "company": {"type": "string", "value": "TechCorp"},
+                "duration": {"type": "string", "value": "2015-2020"},
+                "position": {"type": "string", "value": "Senior AI Scientist"}
+            }, "required": ["company", "position"]},
+            {"type": "object", "properties": {
+                "company": {"type": "string", "value": "AI Solutions"},
+                "duration": {"type": "string", "value": "2010-2015"},
+                "position": {"type": "string", "value": "AI Scientist"}
+            }, "required": ["company", "position"]}
+        ]}
+    }
+    expected_result = {
+        "name": "Henry",
+        "age": 35,
+        "skills": ["AI", "Machine Learning", "Data Science"],
+        "workhistory": [
+            {"company": "TechCorp", "duration": "2015-2020", "position": "Senior AI Scientist"},
+            {"company": "AI Solutions", "duration": "2010-2015", "position": "AI Scientist"}
+        ]
+    }
+    assert handle_json(schema_json) == expected_result
+
+
+def test_handle_json_mixed():
+    mixed_json = {
+        "name": "Henry",
+        "age": {"type": "integer", "value": 35},
+        "skills": ["AI", {"type": "string", "value": "Machine Learning"}, "Data Science"],
+        "workhistory": {"type": "array", "items": [
+            {"type": "object", "properties": {
+                "company": {"type": "string", "value": "TechCorp"},
+                "duration": {"type": "string", "value": "2015-2020"},
+                "position": {"type": "string", "value": "Senior AI Scientist"}
+            }, "required": ["company", "position"]},
+            {"company": "AI Solutions", "duration": "2010-2015", "position": "AI Scientist"}
+        ]}
+    }
+    expected_result = {
+        "name": "Henry",
+        "age": 35,
+        "skills": ["AI", "Machine Learning", "Data Science"],
+        "workhistory": [
+            {"company": "TechCorp", "duration": "2015-2020", "position": "Senior AI Scientist"},
+            {"company": "AI Solutions", "duration": "2010-2015", "position": "AI Scientist"}
+        ]
+    }
+    assert handle_json(mixed_json) == expected_result
+
+
+def test_handle_json_empty():
+    empty_json = {}
+    assert handle_json(empty_json) == empty_json
+
+
+def test_handle_json_no_schema():
+    no_schema_json = {
+        "name": {"first": "Henry", "last": "Smith"},
+        "age": 35,
+        "skills": ["AI", "Machine Learning", "Data Science"]
+    }
+    assert handle_json(no_schema_json) == no_schema_json

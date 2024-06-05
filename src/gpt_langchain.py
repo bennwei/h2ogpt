@@ -80,12 +80,12 @@ from enums import DocumentSubset, no_lora_str, model_token_mapping, source_prefi
     does_support_json_mode, claude3imagetag, gpt4imagetag, geminiimagetag, \
     geminiimage_num_max, claude3image_num_max, gpt4image_num_max, llava_num_max, summary_prefix, extract_prefix, \
     noop_prompt_type, unknown_prompt_type, template_prompt_type, none, claude3_image_tokens, gemini_image_tokens, \
-    gpt4_image_tokens, user_prompt_for_fake_system_prompt0
+    gpt4_image_tokens, user_prompt_for_fake_system_prompt0, empty_prompt_type, \
+    is_vision_model, is_gradio_vision_model, is_json_model, anthropic_mapping
 from evaluate_params import gen_hyper, gen_hyper0
 from gen import SEED, get_limited_prompt, get_relaxed_max_new_tokens, get_model_retry, gradio_to_llm, \
     get_client_from_inference_server
-from prompter import non_hf_types, PromptType, Prompter, get_vllm_extra_dict, system_docqa, system_summary, \
-    is_vision_model, is_gradio_vision_model, is_json_model
+from prompter import non_hf_types, PromptType, Prompter, get_vllm_extra_dict, system_docqa, system_summary
 from src.serpapi import H2OSerpAPIWrapper
 from utils_langchain import StreamingGradioCallbackHandler, _chunk_sources, _add_meta, add_parser, fix_json_meta, \
     load_general_summarization_chain, H2OHuggingFaceHubEmbeddings, make_sources_file, select_docs_with_score, \
@@ -1520,6 +1520,13 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
     prompts: Any = []
     count_output_tokens: Any = 0
 
+    # runtime
+    assistant_role: Any = None
+    user_role: Any = None
+    conv_template_before_prompt: Any = None
+    url: Any = None
+    pload: Any = None
+
     @root_validator()
     def validate_environment(cls, values: Dict) -> Dict:
         """Validate that python package exists in environment."""
@@ -1550,13 +1557,24 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
         conv_template = copy.deepcopy(getattr(conversation_module, conv_template_name))
         return conv_template
 
-    async def send_request(self, url, data, delay=0):
+    async def send_request(self, url, data, delay=0, timeout=None):
+        if timeout is None:
+            timeout = self.max_time
         await asyncio.sleep(delay)
+        timeout_settings = aiohttp.ClientTimeout(total=timeout)  # Set the total timeout
         async_sem = AsyncNullContext() if self.async_sem is None else self.async_sem
         async with async_sem:  # semaphore limits num of simultaneous downloads
-            async with aiohttp.ClientSession() as session:
+            async with aiohttp.ClientSession(timeout=timeout_settings) as session:
                 async with session.post(url, json=data) as resp:
-                    output = await resp.json()
+                    print("headers: %s" % resp.headers, flush=True)
+                    if resp.headers['Content-Type'] == 'application/json':
+                        output = await resp.json()
+                    else:
+                        output_text = await resp.text()
+                        output = {"text": output_text}
+                        if resp.status == 504:
+                            print(f"504 Response received from {url}: {output}", flush=True)
+                            raise TimeoutError(output_text)
         return output
 
     def setup_call(self, prompt):
@@ -1570,15 +1588,15 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
 
         conv_template_name = self.inference_server.split(':')[1]
         conv_template = self.get_conv_template(conv_template_name)
-        user_role = conv_template.roles[0]
-        assistant_role = conv_template.roles[1]
+        self.user_role = conv_template.roles[0]
+        self.assistant_role = conv_template.roles[1]
         if self.system_prompt:
             if not conv_template.system:
                 # assume means can't handle if didn't exist in template
-                conv_template.append_message(role=user_role, message=self.user_prompt_for_fake_system_prompt)
+                conv_template.append_message(role=self.user_role, message=self.user_prompt_for_fake_system_prompt)
                 if self.system_prompt == 'auto':
                     self.system_prompt = 'You are a helpful assistant.' if not self.image_file else "You are helpful visual LLM assistant capable of understanding text and images."
-                conv_template.append_message(role=assistant_role, message=self.system_prompt)
+                conv_template.append_message(role=self.assistant_role, message=self.system_prompt)
             else:
                 our_system_prompt = False
                 if our_system_prompt:
@@ -1591,15 +1609,15 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
                         conv_template.append_message(role="system", message=self.system_prompt)
         for message in self.chat_conversation:
             if isinstance(message[0], str) and message[0]:
-                conv_template.append_message(role=user_role, message=message[0])
+                conv_template.append_message(role=self.user_role, message=message[0])
             if isinstance(message[1], str) and message[1]:
-                conv_template.append_message(role=assistant_role, message=message[1])
+                conv_template.append_message(role=self.assistant_role, message=message[1])
 
-        conv_template_before_prompt = copy.deepcopy(conv_template)
+        self.conv_template_before_prompt = copy.deepcopy(conv_template)
 
         prompt_with_image = f"<image>\n{prompt}"
-        conv_template.append_message(role=user_role, message=prompt_with_image)
-        conv_template.append_message(role=assistant_role, message=None)
+        conv_template.append_message(role=self.user_role, message=prompt_with_image)
+        conv_template.append_message(role=self.assistant_role, message=None)
         prompt_with_template = conv_template.get_prompt()
         if self.context:
             prompt_with_template = self.context + prompt_with_template
@@ -1608,7 +1626,7 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
         presence_penalty = (self.repetition_penalty - 1.0) * 2.0 + 0.0  # so good default
 
         terminate_response = update_terminate_responses([], tokenizer=self.tokenizer)
-        pload = {
+        self.pload = {
             "text": prompt_with_template,
             "sampling_params": {
                 "max_new_tokens": self.max_new_tokens,
@@ -1621,31 +1639,39 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
             "image_data": self.image_file[0],
             "stream": self.stream_output,
         }
-        url = self.inference_server_url + "/generate"
+        self.url = self.inference_server_url + "/generate"
 
+    def do_many(self):
+        # deal with all images
+        # also contains prompt_tokens, completion_tokens, finish_reason, etc.
+        return asyncio.run(self.get_many(self.url, self.pload))
+
+    async def a_do_many(self):
+        return await self.get_many(self.url, self.pload)
+
+    def many_to_prompt(self, prompt, responses):
         if len(self.image_file) > 1:
-            # deal with all images
-            # also contains prompt_tokens, completion_tokens, finish_reason, etc.
-            responses = asyncio.run(self.get_many(url, pload))
-
             # now use all those in final prompt
             responses_context = '\n\n'.join(['# Image %d Answer\n\n%s\n\n' % (i, r['text']) for i, r in
                                              enumerate(responses)])
             prompt_with_responses = f"{responses_context}\n{prompt}"
-            conv_template_before_prompt.append_message(role=user_role, message=prompt_with_responses)
-            conv_template.append_message(role=assistant_role, message=None)
-            prompt_with_template = conv_template_before_prompt.get_prompt()
+            self.conv_template_before_prompt.append_message(role=self.user_role, message=prompt_with_responses)
+            self.conv_template_before_prompt.append_message(role=self.assistant_role, message=None)
+            prompt_with_template = self.conv_template_before_prompt.get_prompt()
             if self.context:
                 prompt_with_template = self.context + prompt_with_template
             self.prompts.append(prompt_with_template)
-            pload.pop('image_data')  # no longer have images
 
-        response = requests.post(
-            url,
-            json=pload,
+            # update pload
+            self.pload['text'] = prompt_with_template  # prompt now has response per image as single prompt
+            self.pload.pop('image_data')  # no longer have images, just text
+
+    def do_final(self):
+        return requests.post(
+            self.url,
+            json=self.pload,
             stream=self.stream_output,
         )
-        return response
 
     async def get_many(self, url, pload):
         pload_no_image = pload.copy()
@@ -1670,7 +1696,11 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
         if self.verbose:
             print("_call", flush=True)
 
-        response = self.setup_call(prompt)
+        self.setup_call(prompt)
+        if len(self.image_file) > 1:
+            responses = self.do_many()
+            self.many_to_prompt(prompt, responses)
+        response = self.do_final()
 
         if not self.stream_output:
             response = response.json()['text']
@@ -1728,7 +1758,11 @@ class SGlangInference(AGenerateStreamFirst, H2Oagenerate, LLM):
         if self.verbose:
             print("_call", flush=True)
 
-        response = self.setup_call(prompt)
+        self.setup_call(prompt)
+        if len(self.image_file) > 1:
+            responses = await self.a_do_many()
+            self.many_to_prompt(prompt, responses)
+        response = self.do_final()
 
         if not self.stream_output:
             response = response.json()['text']
@@ -2909,8 +2943,8 @@ def get_llm(use_openai_model=False,
                             )
         if langchain_agents is not None and \
                 LangChainAgent.AUTOGPT.value in langchain_agents and \
-                does_support_json_mode(inference_server, model_name):
-            azure_kwargs.update(response_format={"type": "json_object"})
+                does_support_json_mode(inference_server, model_name, json_vllm=json_vllm):
+            azure_kwargs.update(dict(response_format=dict(type="json_object")))
 
         kwargs_extra = {}
 
@@ -2939,7 +2973,7 @@ def get_llm(use_openai_model=False,
                 if is_json_model(model_name, inference_server,
                                  json_vllm=json_vllm) and response_format == 'json_object':
                     # vllm without guided_json can't make json directly
-                    kwargs_extra.update(dict(type=response_format if guided_json else 'text'))
+                    kwargs_extra.update(dict(response_format=dict(type=response_format if guided_json else 'text')))
                 async_output = False  # https://github.com/h2oai/h2ogpt/issues/928
                 # async_sem = asyncio.Semaphore(num_async) if async_output else NullContext()
                 kwargs_extra.update(dict(tokenizer=tokenizer,
@@ -3142,7 +3176,6 @@ def get_llm(use_openai_model=False,
         cls = H2OChatMistralAI
 
         # Langchain oddly passes some things directly and rest via model_kwargs
-        model_kwargs = dict()
         kwargs_extra = {}
         kwargs_extra.update(dict(system_prompt=system_prompt, chat_conversation=chat_conversation,
                                  user_prompt_for_fake_system_prompt=user_prompt_for_fake_system_prompt))
@@ -3158,6 +3191,24 @@ def get_llm(use_openai_model=False,
             # As if still since Feb 26, 2024 no updates for other models despite the bottom of https://mistral.ai/news/mistral-large/
             # Not vllm, guided_json not required
             kwargs_extra.update(dict(response_format=dict(type=response_format)))
+        # Langchain oddly passes some things directly and rest via model_kwargs
+        if does_support_functiontools(inference_server, model_name) and \
+                is_json_model(model_name, inference_server) and guided_json and response_format == 'json_object':
+            # https://docs.mistral.ai/capabilities/function_calling/
+            model_kwargs = dict(tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "JSON",
+                        "description": "Document, image, chat history conversion to strict JSON.",
+                        "parameters": guided_json,
+                    }
+                }
+            ],
+                # tool_choice='any'
+            )
+        else:
+            model_kwargs = {}
 
         llm = cls(model=model_name,
                   mistral_api_key=os.getenv('MISTRAL_API_KEY'),
@@ -3169,12 +3220,12 @@ def get_llm(use_openai_model=False,
                   stream=stream_output,
                   stream_output=stream_output,
                   default_request_timeout=max_time,
-                  model_kwargs=model_kwargs,
                   max_tokens=max_new_tokens,
                   safe_mode=False,
                   random_seed=seed,
                   verbose=verbose,
                   tokenizer=tokenizer,
+                  **model_kwargs,
                   **kwargs_extra,
                   llm_kwargs=dict(stream=True),
                   )
@@ -3249,6 +3300,7 @@ def get_llm(use_openai_model=False,
         callbacks = [streaming_callback]
         streamer = callbacks[0] if stream_output else None
 
+        num_async = min(2, num_async)  # can't handle as much
         async_sem = asyncio.Semaphore(num_async) if async_output else AsyncNullContext()
 
         if is_vision_model(model_name):
@@ -7779,12 +7831,15 @@ def get_chain(query=None,
         requests_tools = load_tools(["requests_all"])
 
         from langchain_community.utilities.wolfram_alpha import WolframAlphaAPIWrapper
-        wolfram = WolframAlphaAPIWrapper()
-        wolfram_tool = Tool(
-            name="wolframalpha",
-            description="WolframAlpha is an answer engine developed by Wolfram Research. It answers factual queries by computing answers from externally sourced data.",
-            func=wolfram.run,
-        )
+        if os.environ.get('WOLFRAM_ALPHA_APPID'):
+            wolfram = WolframAlphaAPIWrapper()
+            wolfram_tool = Tool(
+                name="wolframalpha",
+                description="WolframAlpha is an answer engine developed by Wolfram Research. It answers factual queries by computing answers from externally sourced data.",
+                func=wolfram.run,
+            )
+        else:
+            wolfram_tool = None
 
         from langchain_experimental.llm_symbolic_math.base import LLMSymbolicMathChain
         sympy_math = LLMSymbolicMathChain.from_llm(llm)
@@ -7826,15 +7881,14 @@ def get_chain(query=None,
             tools.extend([sympy_tool])
 
         from langchain_community.docstore import InMemoryDocstore
-        from langchain_community.embeddings import OpenAIEmbeddings
         from langchain_community.vectorstores import FAISS
 
         # Define your embedding model
-        embeddings_model = OpenAIEmbeddings()
+        embeddings_model = get_embedding(use_openai_embedding, hf_embedding_model=hf_embedding_model)
         # Initialize the vectorstore as empty
         import faiss
 
-        embedding_size = 1536
+        embedding_size = len(embeddings_model.embed_documents(['prompt'])[0])
         index = faiss.IndexFlatL2(embedding_size)
         vectorstore = FAISS(embeddings_model.embed_query, index, InMemoryDocstore({}), {})
 
@@ -8147,6 +8201,7 @@ def get_chain(query=None,
                      add_search_to_context,
                      system_prompt,
                      doc_json_mode,
+                     model_name=model_name,
                      prompter=prompter)
 
     model_max_length = get_model_max_length(llm=llm, tokenizer=tokenizer, inference_server=inference_server,
@@ -8369,7 +8424,7 @@ def get_chain(query=None,
         metadata_in_context_set = FullSet()
     elif metadata_in_context == 'auto':
         metadata_in_context_set = set(
-            ['date', 'file_path', 'input_type', 'keywords', 'chunk_id', 'page', 'source', 'title', 'total_pages'])
+            ['date', 'file_path', 'input_type', 'keywords', 'chunk_id', 'page', 'source', 'title'])
     else:
         assert isinstance(metadata_in_context, list)
         metadata_in_context_set = set(metadata_in_context)
@@ -8611,6 +8666,7 @@ def get_chain(query=None,
                      add_search_to_context,
                      system_prompt,
                      doc_json_mode,
+                     model_name=model_name,
                      prompter=prompter)
 
     if doc_json_mode:
@@ -8829,6 +8885,7 @@ def get_template(query, iinput,
                  add_search_to_context,
                  system_prompt,
                  doc_json_mode,
+                 model_name=None,
                  prompter=None):
     # Escape braces in the inputs that will be used in the format strings
     query_esc = escape_braces(query)
@@ -8838,7 +8895,16 @@ def get_template(query, iinput,
     pre_prompt_query = escape_braces(pre_prompt_query)
     pre_prompt_summary = escape_braces(pre_prompt_summary)
 
-    triple_quotes = """
+    if True or model_name and model_name in anthropic_mapping:
+        # NOTE: enabled generally for now, seems to help generally
+        triple_quotes_start = """
+    <all_documents>
+    """
+        triple_quotes_finish = """
+    </all_documents>
+    """
+    else:
+        triple_quotes_start = triple_quotes_finish = """
 \"\"\"
 """
 
@@ -8858,7 +8924,7 @@ def get_template(query, iinput,
                                                 'information in the web search sources (and their source dates and website source)')
 
     if doc_json_mode:
-        triple_quotes = '\n\n'
+        triple_quotes_start = triple_quotes_finish = '\n\n'
         question_fstring = """{{"question": "{question}".  Respond absolutely only in valid JSON.}}"""
         if got_any_docs:
             if query_action:
@@ -8886,7 +8952,8 @@ def get_template(query, iinput,
                 template_if_no_docs = """%s%s%s%s%s""" % (question_fstring, sys_context_no_docs, '', fstring, '')
             else:
                 template = """%s%s%s%s%s\n%s""" % (
-                    pre_prompt_query, triple_quotes, fstring, triple_quotes, prompt_query, question_fstring)
+                    pre_prompt_query, triple_quotes_start, fstring, triple_quotes_finish, prompt_query,
+                    question_fstring)
                 if doc_json_mode:
                     template_if_no_docs = """{context}{{"question": {question}}}"""
                 else:
@@ -8905,7 +8972,8 @@ def get_template(query, iinput,
         else:
             fstring = '{input_documents}'
         # triple_quotes includes \n before """ and after """
-        template = """%s%s%s%s%s\n""" % (pre_prompt_summary, triple_quotes, fstring, triple_quotes, prompt_summary)
+        template = """%s%s%s%s%s\n""" % (
+        pre_prompt_summary, triple_quotes_start, fstring, triple_quotes_finish, prompt_summary)
         template_if_no_docs = "Exactly only say: There are no documents to summarize/extract from."
     elif langchain_action in [LangChainAction.SUMMARIZE_REFINE]:
         template = ''  # unused
@@ -9366,6 +9434,10 @@ def _update_user_db(file,
                 len(file) > max_docs_public_api and not from_ui:
             raise ValueError("Public instance only allows up to"
                              " %d (%d from API) documents updated at a time." % (max_docs_public, max_docs_public_api))
+
+    if is_url is None and is_url is None and file:
+        # assume add_button action if not set
+        is_url = True
 
     if langchain_mode == LangChainMode.DISABLED.value:
         return None, langchain_mode, get_source_files(), "", None, {}

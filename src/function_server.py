@@ -112,7 +112,7 @@ def initialize_gen_kwargs():
 
             # FIXME: Deal with GPU IDs for each caption/ASR/DocTR model, use MIG, etc.
 
-            from src.gen import main as gen_main
+            from gen import main as gen_main
             gen_kwargs = gen_main(**main_kwargs)
 
 
@@ -126,9 +126,11 @@ else:
 @app.post("/execute_function/", dependencies=check_key)
 def execute_function(request: FunctionRequest):
     # Mapping of function names to function objects
-    from src.gpt_langchain import path_to_docs
+    from gpt_langchain import path_to_docs
+    from vision.utils_vision import process_file_list
     FUNCTIONS = {
         'path_to_docs': path_to_docs,
+        'process_file_list': process_file_list,
     }
     try:
         # Fetch the function from the function map
@@ -164,6 +166,16 @@ def execute_function(request: FunctionRequest):
     except Exception as e:
         traceback_str = ''.join(traceback.format_exception(e))
         raise HTTPException(status_code=500, detail=traceback_str)
+    finally:
+        do_check(in_finally=True)
+
+
+def do_check(in_finally=False):
+    health_result = check_some_conditions()
+    if not health_result:
+        print("Health check failed! Terminating without cleanup (to avoid races) %s..."% in_finally)
+        if os.getenv('multiple_workers_gunicorn'):
+            os._exit(1)
 
 
 state_checks = True
@@ -172,16 +184,13 @@ if state_checks:
     async def startup_event(verbose=True):
         asyncio.create_task(periodic_health_check(verbose=verbose))
 
+
     async def periodic_health_check(verbose=False):
         while True:
             if verbose:
                 print("Checking health...")
             await asyncio.sleep(120)  # Wait for 2 minutes between checks
-            health_result = check_some_conditions()
-            if not health_result:
-                print("Health check failed! Terminating without cleanup (to avoid races)...")
-                if os.getenv('multiple_workers_gunicorn'):
-                    os._exit(1)
+            do_check(in_finally=False)
 
     def check_some_conditions():
         # Replace with actual health check logic

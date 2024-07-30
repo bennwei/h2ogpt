@@ -8,7 +8,8 @@ from utils import clear_torch_cache, NullContext, get_kwargs
 
 
 def run_cli(  # for local function:
-        base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None, regenerate_gradio_clients=None,
+        base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None,
+        regenerate_gradio_clients=None,
         debug=None,
         examples=None, memory_restriction_level=None,
         # evaluate kwargs
@@ -30,7 +31,7 @@ def run_cli(  # for local function:
         # for some evaluate args
         load_awq='',
         stream_output=None, async_output=None, num_async=None, stream_map=None,
-        prompt_type=None, prompt_dict=None, system_prompt=None,
+        prompt_type=None, prompt_dict=None, chat_template=None, system_prompt=None,
         temperature=None, top_p=None, top_k=None, penalty_alpha=None, num_beams=None,
         max_new_tokens=None, min_new_tokens=None, early_stopping=None, max_time=None, repetition_penalty=None,
         num_return_sequences=None, do_sample=None, seed=None, chat=None,
@@ -84,6 +85,16 @@ def run_cli(  # for local function:
         tts_speed=None,
         image_file=None,
         image_control=None,
+        images_num_max=None,
+        image_resolution=None,
+        image_format=None,
+        rotate_align_resize_image=None,
+        video_frame_period=None,
+        image_batch_image_prompt=None,
+        image_batch_final_prompt=None,
+        image_batch_stream=None,
+        visible_vision_models=None,
+        video_file=None,
 
         response_format=None,
         guided_json=None,

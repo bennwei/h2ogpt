@@ -41,6 +41,7 @@ class H2oGPTParams(BaseModel):
     # handled by extra_body passed to OpenAI API
     prompt_type: str | None = None
     prompt_dict: Dict | str | None = None
+    chat_template: str | None = None
     penalty_alpha: float | None = 0.0
     num_beams: int | None = 1
     min_new_tokens: int | None = 1
@@ -110,6 +111,18 @@ class H2oGPTParams(BaseModel):
 
     image_file: str | None = None
     image_control: str | None = None
+    images_num_max: int | None = None
+    image_resolution: tuple | None = None
+    image_format: str | None = None
+    rotate_align_resize_image: bool | None = None
+    video_frame_period: int | None = None
+    image_batch_image_prompt: str | None = None
+    image_batch_final_prompt: str | None = None
+    image_batch_stream: bool | None = None
+    visible_vision_models: Union[str, int] | None = None
+    video_file: Union[str, list] = None
+
+    model_lock: dict | None = None
 
     response_format: Optional[ResponseFormat] = Field(
         default=None,

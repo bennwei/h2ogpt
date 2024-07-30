@@ -1,5 +1,11 @@
 # Vision/Image packages
-fiftyone>=0.23.8
+fiftyone>=0.24.1
 pytube
-diffusers==0.24.0
+diffusers>=0.29.0
 yt-dlp>=2024.5.27
+# if want to use gif_to_mp4()
+# moviepy>=0.5.1
+
+# for fiftyone with patches
+# bugs in 6.3.4, stick with 6.2.2
+pytubefix==6.2.2

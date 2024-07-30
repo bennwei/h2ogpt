@@ -5,6 +5,7 @@ BUILD_TAG             := $(shell git describe --always --dirty)
 DOCKER_TEST_IMAGE     := harbor.h2o.ai/h2ogpt/test-image:$(BUILD_TAG)
 PYTHON_BINARY         ?= `which python`
 DEFAULT_MARKERS       ?= "not need_tokens and not need_gpu"
+DOCKER_TEST_IMAGE_INTERNVL := harbor.h2o.ai/h2ogpt/test-image-internvl:$(BUILD_TAG)
 
 .PHONY: venv dist test publish docker_build build_info.txt
 
@@ -69,6 +70,24 @@ docker_build_runner: docker_build
 ifdef BUILD_ID
 	docker tag $(DOCKER_TEST_IMAGE) gcr.io/vorvan/h2oai/h2ogpt-runtime:$(PACKAGE_VERSION)-$(BUILD_ID)
 	docker push gcr.io/vorvan/h2oai/h2ogpt-runtime:$(PACKAGE_VERSION)-$(BUILD_ID)
+endif
+
+
+docker_build_internvl: build_info.txt git_hash.txt
+	DOCKER_BUILDKIT=1 docker build -t $(DOCKER_TEST_IMAGE_INTERNVL) -f docs/Dockerfile.internvl .
+	docker push $(DOCKER_TEST_IMAGE_INTERNVL)
+
+	docker tag $(DOCKER_TEST_IMAGE_INTERNVL) gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:$(BUILD_TAG)
+	docker tag $(DOCKER_TEST_IMAGE_INTERNVL) gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:$(PACKAGE_VERSION)
+	docker tag $(DOCKER_TEST_IMAGE_INTERNVL) gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:latest
+
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:$(BUILD_TAG)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:$(PACKAGE_VERSION)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:latest
+
+ifdef BUILD_ID
+	docker tag $(DOCKER_TEST_IMAGE_INTERNVL) gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:$(PACKAGE_VERSION)-$(BUILD_ID)
+	docker push gcr.io/vorvan/h2oai/h2oai-h2ogpt-internvl:$(PACKAGE_VERSION)-$(BUILD_ID)
 endif
 
 print-%:

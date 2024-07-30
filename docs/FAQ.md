@@ -1,5 +1,13 @@
 ## Frequently asked questions
 
+### vLLM driver requirements
+
+vllm >= 0.5.0 requires a cuda >=12.4 driver, else docker will fail with:
+```text
+nvidia-container-cli: requirement error: unsatisfied condition: cuda>=12.4, please update your driver to a newer version, or use an earlier cuda container: unknown.
+```
+
+Or instead of using `vllm/vllm-openai:latest`, use `vllm/vllm-openai:v0.4.2`.
 
 ### Parallel and Isolated OpenAI Proxy Servers
 
@@ -8,7 +16,7 @@ python generate.py --openai_server=True --openai_workers=2 ...
 ```
 will launch 2 OpenAI proxy servers using FastAPIs workers, so each is a separate fork independent of any other process.
 
-This speeds up any calls to the OpenAI server, letting FastAPI handle concurrency and load balancing between the different workers using same IP/port via OS management.
+This speeds up any calls to the OpenAI server, letting FastAPI handle concurrency and load balancing between the different workers using the same IP/port via OS management.
 
 ### Parallel and Isolated Ingestion Servers
 
@@ -17,22 +25,23 @@ python generate.py --function_server=True --function_server_workers=2 ...
 ```
 will launch 2 Ingestion proxy servers using FastAPIs workers, so each is a separate fork independent of any other process.  If ASR, DocTR, captions, etc. are enabled, these will be run on same GPUs in separate processes.
 
-This helps keep the main UI server isolated from ingestion tasks that can consume alot of cpu or hang the Gradio server.
+This helps keep the main UI server isolated from ingestion tasks that can consume significant amounts of CPU resources or hang the Gradio server.
 
 ### Open Web UI
+
+Choose key:
+```bash
+export api_key='EMPTY'
+```
 
 Run h2oGPT somehow with OpenAI server active (as is default).
 ```bash
 python generate.py --save_dir=savegpt3internal --base_model=meta-llama/Meta-Llama-3-8B-Instruct --score_model=None --top_k_docs=-1 --add_disk_models_to_ui=False --enable_tts=True --enable_stt=True --enable_image=True --visible_image_models=['sdxl_turbo'] --pre_load_embedding_model=True
 ```
-You can use ` --openai_port=14365` like default for ollama if desired, then avoid passing `OLLAMA_HOST` below.  One can choose any other [image generation models](#image-generation) or [TTS models](#speech-to-text-stt-and-text-to_speech-tts) as well.
+You can use ` --openai_port=14365` like default for ollama if desired, then avoid passing `OLLAMA_HOST` below.  One can choose any other [image generation models](#image-generation) or [TTS models](#speech-to-text-stt-and-text-to_speech-tts) as well.  Use `--enforce_h2ogpt_api_key=True` or `--enforce_h2ogpt_ui_key=True` to enforce the API key as required for API or UI, respectively.
 
-Then run the Open Web UI docker command
+Then run the Open Web UI docker command (no h2oGPT file handling, but rest of h2oGPT features):
 ```bash
-
-Then run the Open Web UI docker command
-```bash
-export api_key='EMPTY'
 docker run -d -p 3000:8080 -e WEBUI_NAME='h2oGPT' \
 -e DEFAULT_MODELS=meta-llama/Meta-Llama-3-8B-Instruct \
 -e OPENAI_API_BASE_URL=http://0.0.0.0:5000/v1 \
@@ -42,41 +51,124 @@ docker run -d -p 3000:8080 -e WEBUI_NAME='h2oGPT' \
 -e IMAGES_OPENAI_API_BASE_URL=http://0.0.0.0:5000/v1 \
 -e IMAGE_GENERATION_MODEL='sdxl_turbo' \
 -e IMAGES_OPENAI_API_KEY=$api_key \
--e AUDIO_OPENAI_API_BASE_URL=http://0.0.0.0:5000/v1 \
--e AUDIO_OPENAI_API_KEY=$api_key \
--e AUDIO_OPENAI_API_VOICE='SLT (female)' \
--e AUDIO_OPENAI_API_MODEL='microsoft/speecht5_tts' \
+-e AUDIO_STT_ENGINE='openai' \
+-e AUDIO_STT_OPENAI_API_BASE_URL=http://0.0.0.0:5000/v1 \
+-e AUDIO_STT_OPENAI_API_KEY=$api_key \
+-e AUDIO_TTS_ENGINE='openai' \
+-e AUDIO_TTS_OPENAI_API_BASE_URL=http://0.0.0.0:5000/v1 \
+-e AUDIO_TTS_OPENAI_API_KEY=$api_key \
+-e AUDIO_TTS_OPENAI_API_VOICE='SLT (female)' \
+-e AUDIO_TTS_OPENAI_API_MODEL='microsoft/speecht5_tts' \
 -e RAG_EMBEDDING_ENGINE='openai' \
 -e RAG_OPENAI_API_BASE_URL='http://0.0.0.0:5000/v1' \
--e OLLAMA_BASE_URL=http://0.0.0.0 \
--e OLLAMA_HOST=0.0.0.0:5000 \
+-e export RAG_OPENAI_API_KEY=$api_key \
 -e ENABLE_LITELLM=False \
+-e ENABLE_OPENAI_API=True \
+-e ENABLE_OLLAMA_API=False \
+-e RAG_EMBEDDING_OPENAI_BATCH_SIZE=1024 \
+-e RAG_TOP_K=20 \
+-e SERPER_API_KEY='' \
 --network host -v open-webui:/app/backend/data --name open-webui --restart always ghcr.io/open-webui/open-webui:main
 ```
-Then go to `http://0.0.0.0:8080/` to see the UI (`--network host` changed port from 3000 -> 8080).
+Then go to `http://0.0.0.0:8080/` to see the UI (`--network host` changed port from 3000 -> 8080).  To remove the container do `docker stop <hash> ; docker remove <hash>` for the container ID `<hash>`.
 
-Note:  The first time you login to Open Web UI, that user will be admin user who can set defaults for various admin things, have admin panel to control user behavior and settings, etc.  Additional users will take the role the admin sets (by default, pending, which can be changed to user for anyone to login).
 
-If one wants to choose a specific model, that is not currently possible through h2oGPT, which uses its fixed single embedding model.  But this may be allowed in future and then one would set:
+If you want to choose a specific model, that is not currently possible through h2oGPT, which uses its fixed single embedding model.  But this may be allowed in future and then one would set:
 ```bash
 -e RAG_EMBEDDING_MODEL='hkunlp/instructor-large' \
 -e RAG_EMBEDDING_MODEL_TRUST_REMOTE_CODE=True \
 ```
 
-For TTS, if we detect a native OpenAI voice, we translate that into defaults for H2oGPT.  To choose a specific voice, one can go to settings and change Audio -> TTS -> OpenAI and Set Voice to `SLT (female)` (if using Microsoft TTS) or `Female AI Assistant` (if using Coqui TTS).  ENVs do not yet exist to control default voice, but they would be like:
+To enable h2oGPT backend for document ingestion (much more advanced than OpenWebUI), run h2oGPT with these extra arguments:
 ```bash
--e AUDIO_GENERATION_ENGINE='openai' \
--e AUDIO_GENERATION_VOICE='SLT (female)' \
--e OPENAI_API_USER='user:password' \
+--function_server=True --function_server_port=5002 --function_api_key=$api_key
 ```
+and then run open-webui as:
+```bash
+# python env
+conda create -n open-webui-run -y
+conda activate open-webui-run
+conda install -y python=3.11
+# pip install open-webui  # for Open Web UI's RAG and file ingestion
+# pip install git+https://github.com/h2oai/open-webui.git  # for h2oGPT file ingestion
+pip install https://h2o-release.s3.amazonaws.com/h2ogpt/open_webui-0.3.8-py3-none-any.whl  # for latest release
+pip install alembic uvicorn[standard]
+#
+export H2OGPT_LOADERS=1  # for h2oGPT file ingestion
+# ensure certain things not set
+unset OPENAI_API_BASE_URLS
+# bash ENVs
+export WEBUI_NAME='h2oGPT'
+export DEFAULT_MODELS=meta-llama/Meta-Llama-3-8B-Instruct
+export OPENAI_API_BASE_URL='http://0.0.0.0:5000/v1'
+export GLOBAL_LOG_LEVEL=INFO
+export OPENAI_API_KEY=$api_key
+export ENABLE_IMAGE_GENERATION=True
+export IMAGE_GENERATION_ENGINE='openai'
+export IMAGES_OPENAI_API_BASE_URL='http://0.0.0.0:5000/v1'
+# choose sd3 for Stable Diffusion 3 etc. and launch h2oGPT to match
+export IMAGE_GENERATION_MODEL='sdxl_turbo'
+export IMAGES_OPENAI_API_KEY=$api_key
+export AUDIO_STT_ENGINE='openai'
+export AUDIO_STT_OPENAI_API_BASE_URL=http://0.0.0.0:5000/v1
+export AUDIO_STT_OPENAI_API_KEY=$api_key
+export AUDIO_TTS_ENGINE='openai'
+export AUDIO_TTS_OPENAI_API_BASE_URL='http://0.0.0.0:5000/v1'
+export AUDIO_TTS_OPENAI_API_KEY=$api_key
+# can use "Female AI Assistant" for Coqui TTS
+# export AUDIO_TTS_OPENAI_API_VOICE='Female AI Assistant'
+export AUDIO_TTS_OPENAI_API_VOICE='SLT (female)'
+# can use  for Coqui TTS, but just need to launch h2oGPT with it and h2oGPT will divert to correct TTS
+# export AUDIO_TTS_OPENAI_API_MODEL='tts_models/multilingual/multi-dataset/xtts_v2'
+export AUDIO_TTS_OPENAI_API_MODEL='microsoft/speecht5_tts'
+export RAG_EMBEDDING_ENGINE='openai'
+export RAG_OPENAI_API_BASE_URL='http://0.0.0.0:5000/v1'
+export RAG_OPENAI_API_KEY=$api_key
+export RAG_EMBEDDING_OPENAI_BATCH_SIZE=1024
+export RAG_TOP_K=20
+export ENABLE_LITELLM=False
+export ENABLE_OLLAMA_API=False
+export ENABLE_OPENAI_API=True
+export SERPER_API_KEY=''  # fill me
+
+export H2OGPT_FUNCTION_SERVER_HOST=0.0.0.0
+export H2OGPT_FUNCTION_SERVER_PORT=5002  # match with --function_server_port
+export H2OGPT_FUNCTION_SERVER_API_KEY=$api_key
+
+# choose:
+export ADMIN_EMAIL=admin@domain
+export DEFAULT_USER_ROLE=user
+
+# only for Google OAuth
+# See https://docs.openwebui.com/tutorial/sso/#google
+export ENABLE_OAUTH_SIGNUP=true
+export GOOGLE_CLIENT_ID=FILL
+export GOOGLE_CLIENT_SECRET=FILL
+
+# below is required if google complains about redirect and tries to go to http instead of https
+# only h2oai repo and package has this fix
+export HTTPS_REDIRECT=1
+
+# choose
+export PORT=8080
+
+# run
+open-webui serve --host=0.0.0.0 --port=$PORT &> openweb.log &
+disown %1
+```
+
+Note: The first time you log in to Open Web UI, that user will be the admin user who can set defaults for various admin settings, access the admin panel to control user behavior and settings, etc. Additional users will take the role set by the admin (by default, pending, which can be changed to user for anyone to log in).
+
+For TTS, if we detect a native OpenAI voice, we translate that into defaults for H2oGPT.  To choose a specific voice, one can go to settings and change Audio -> TTS -> OpenAI and Set Voice to `SLT (female)` (if using Microsoft TTS) or `Female AI Assistant` (if using Coqui TTS).  ENVs do not yet exist to control default voice, but the h2oai version of open-webui chooses OpenAI as default for STT and TTS so can use h2oGPT by default.
+
 See https://github.com/open-webui/open-webui/issues/2312.  The `OPENAI_API_USER` is not currently required since not using user-specific files at moment, but would be required if the Gradio server had authentication setup if h2oGPT was allowing access to files by Open Web UI.
 
 Flaws with Open Web UI:
 * Chat history is not used if any document is in the chat history.
+* To change hyperparameters, go to settings -> general -> advanced parameters.  In h2oGPT branch the temp=0 (0.8 normally), max_tokens=1024 (128 normally), context=4096 (2048 normally) and there is no way to control at startup time.
+* You have to choose max_tokens to be reasonable for the model, e.g. less than 4096 for many models.  But it has no per-model settings.
 
 See for more [help](https://docs.openwebui.com/troubleshooting/).
-
-To remove the container do `docker stop <hash> ; docker remove <hash>` for the container ID `<hash>`.
 
 ![openwebui1.png](openwebui1.png)
 
@@ -139,7 +231,7 @@ For 8x22b, we recommend https://huggingface.co/mistral-community/Mixtral-8x22B-v
 - [x] Handle old vLLM and other models that do not have json mode by using `json_code` mode effectively.
 - [x] When making JSON without guided_json schema, handle MistralAI and OpenAI directly using their JSON mode.
 
-h2oGPT in general uses guided_json like defined below to tell LLM the schema as part of prompt, unless vLLM >= 0.4.0 when this is provided directly to vLLM.  Schemas like `guided_json` are not required for JSON mode, but to follow some schema it is required, and only vLLM >= 0.4.0 will strictly follow the schema due to guided generation using outlines package.
+h2oGPT in general uses `guided_json` as defined below to tell LLM the schema as part of prompt, unless vLLM >= 0.4.0 when this is provided directly to vLLM.  Schemas like `guided_json` are not required for JSON mode, but to follow some schema it is required, and only vLLM >= 0.4.0 will strictly follow the schema due to guided generation using outlines package.
 
 Example `guided_json`, `guided_regex`, `guided_choice` schemas to be passed in as string to h2oGPT.
 ```
@@ -210,8 +302,28 @@ although `CohereForAI/aya-101` is auto-detected as T5 Conditional already.
 ### Running oLLaMa vs. h2oGPT as inference server
 
 * Run oLLaMa as server for h2oGPT frontend.
- 
-  E.g. for some GGUF file (e.g. `llama-2-7b-chat.Q6_K.gguf`) in llamacpp_path follow https://github.com/ollama/ollama?tab=readme-ov-file#import-from-gguf:
+
+    Shut down ollama and re-run on whichever GPUs wanted:
+    ```bash
+    sudo systemctl stop ollama.service
+    CUDA_VISIBLE_DEVICES=0 OLLAMA_HOST=0.0.0.0:11434 ollama serve &> ollama.log &
+    ollama run mistral:v0.3
+    ```
+    or see for [selecting GPUs](https://github.com/ollama/ollama/issues/1813#issuecomment-2101598931).
+
+    Then run:
+    ```bash
+    python generate.py --base_model=mistral:v0.3 --inference_server=vllm_chat:http://localhost:11434/v1/ --prompt_type=openai_chat --max_seq_len=8094
+    ```
+    where `--max_seq_len=8094` can be chosen up to 32k for mistral.  Ignore any errors related to the name when h2oGPT attempts to try getting data from HF.
+
+    For more accurate tokenization specify the tokenizer and hf token (because mistralai is gated on HF):
+    ```bash
+    python generate.py --base_model=mistral:v0.3 --tokenizer_base_model=mistralai/Mistral-7B-Instruct-v0.3 --max_seq_len=8094 --inference_server=vllm_chat:http://localhost:11434/v1/ --prompt_type=openai_chat --use_auth_token=<token>
+    ```
+    for some HF token `<token>`.
+
+*   For some specific GGUF file (e.g. `llama-2-7b-chat.Q6_K.gguf`) in llamacpp_path follow https://github.com/ollama/ollama?tab=readme-ov-file#import-from-gguf:
   
     Create `Modelfile` file:
     ```text
@@ -228,7 +340,9 @@ although `CohereForAI/aya-101` is auto-detected as T5 Conditional already.
     ```
     This gives around 55 tokens/sec on 3090Ti on i9.
 
-    The [problem](https://github.com/ollama/ollama/issues/2963) is that oLLaMa does not allow for a runtime change to system prompt or other parameters like temperature.
+  The [problem](https://github.com/ollama/ollama/issues/2963) is that oLLaMa does not allow for a runtime change to system prompt or other parameters like temperature.
+
+  If ollama seems slow, check ollama.log if hit `cudaMalloc failed: out of memory` and check if GPU is being used by another process.
 
 * Run h2oGPT as both server and frontend:
   
@@ -491,22 +605,24 @@ The vLLMs/TGIs are started with these options on various machines.
 
 For 8*A100 80GB, `go_VLLM.12.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
 mkdir -p $HOME/.cache/huggingface/hub
-
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=0,1,2,3"' \
     --shm-size=10.24gb \
     -p 5000:5000 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5000 \
         --host=0.0.0.0 \
         --model=h2oai/h2ogpt-4096-llama2-70b-chat \
@@ -517,19 +633,24 @@ docker run -d \
 	--max-num-batched-tokens 8192 \
         --download-dir=/workspace/.cache/huggingface/hub &>> logs.vllm_server.70.txt
 
+mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=4"' \
     --shm-size=10.24gb \
     -p 5002:5002 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0-180 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5002 \
         --host=0.0.0.0 \
         --model=HuggingFaceH4/zephyr-7b-beta \
@@ -541,19 +662,24 @@ docker run -d \
 	--max-num-batched-tokens 32768 \
         --download-dir=/workspace/.cache/huggingface/hub &>> logs.vllm_server.zephyrbeta.txt
 
+mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=4"' \
     --shm-size=10.24gb \
     -p 5001:5001 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5001 \
         --host=0.0.0.0 \
         --model=h2oai/h2ogpt-4096-llama2-13b-chat \
@@ -564,19 +690,24 @@ docker run -d \
 	--gpu-memory-utilization 0.8 \
         --download-dir=/workspace/.cache/huggingface/hub &>> logs.vllm_server.13.txt
 
+mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=5,6"' \
     --shm-size=10.24gb \
     -p 5003:5003 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5003 \
         --host=0.0.0.0 \
         --model=h2oai/h2ogpt-32k-codellama-34b-instruct \
@@ -587,19 +718,24 @@ docker run -d \
 	--max-num-batched-tokens 32768 \
         --download-dir=/workspace/.cache/huggingface/hub &>> logs.vllm_server.code32k.txt
 
+mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=7"' \
     --shm-size=10.24gb \
     -p 5004:5004 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5004 \
         --host=0.0.0.0 \
         --model=mistralai/Mistral-7B-Instruct-v0.2 \
@@ -613,25 +749,31 @@ and run `bash ./go_VLLM.12.sh` on that machine.
 
 On another 4*A100 80GB, `go_VLLM.28.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
+docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1
 mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
 
 # TGI
 docker run -d --gpus '"device=0,1"' --shm-size 12g -v $HOME/.cache/huggingface/hub/:/data -p 5002:80 ghcr.io/huggingface/text-generation-inference:1.3 --model-id mistralai/Mixtral-8x7B-Instruct-v0.1 --trust-remote-code --max-stop-sequences=6 --max-batch-prefill-tokens=32768 --max-input-length 32768 --max-total-tokens 66560 --max-batch-total-tokens 131072 --sharded true --num-shard 2
 
+mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=3"' \
     --shm-size=10.24gb \
     -p 5001:5001 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5001 \
         --host=0.0.0.0 \
         --model=Nexusflow/NexusRaven-V2-13B \
@@ -641,19 +783,24 @@ docker run -d \
 	--max-model-len=16384 \
         --download-dir=/workspace/.cache/huggingface/hub &>> logs.vllm_server.func13b.txt
 
+mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=2"' \
     --shm-size=10.24gb \
     -p 5005:5005 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5005 \
         --host=0.0.0.0 \
         --model=openchat/openchat-3.5-1210 \
@@ -665,22 +812,24 @@ and run `bash ./go_VLLM.28.sh`.
 
 For another 4*A100 80GB, `go_VLLM.22.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
 mkdir -p $HOME/.cache/huggingface/hub
-
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=0,1,2,3"' \
     --shm-size=10.24gb \
     -p 5000:5000 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5000 \
         --host=0.0.0.0 \
         --model=NousResearch/Nous-Capybara-34B \
@@ -693,20 +842,24 @@ and run `bash ./go_VLLM.22.sh`
 
 For another 1*A100 80GB, `go_VLLM.144.sh` has:
 ```bash
+mkdir -p $HOME/.cache/huggingface/hub
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=2"' \
     --shm-size=10.24gb \
     -p 5014:5014 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
-    -e HUGGING_FACE_HUB_TOKEN=aaa \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5016 \
         --host=0.0.0.0 \
         --model=google/gemma-7b-it \
@@ -722,22 +875,24 @@ and run `bash ./go_VLLM.144.sh`.
 
 For another 2*A10G, `go_VLLM.199.sh` has:
 ```bash
-docker pull gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0
 mkdir -p $HOME/.cache/huggingface/hub
-
+mkdir -p $HOME/.cache/huggingface/modules/
+mkdir -p $HOME/.triton/cache/
+mkdir -p $HOME/.config/vllm
 docker run -d \
     --runtime=nvidia \
     --gpus '"device=2,3"' \
     --shm-size=10.24gb \
     -p 5014:5014 \
-    --entrypoint /h2ogpt_conda/vllm_env/bin/python3.10 \
     -e NCCL_IGNORE_DISABLED_P2P=1 \
+    -e HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN \
+    -e VLLM_NCCL_SO_PATH=/usr/local/lib/python3.10/dist-packages/nvidia/nccl/lib/libnccl.so.2 -e NUMBA_CACHE_DIR=/tmp/ \
     -v /etc/passwd:/etc/passwd:ro \
     -v /etc/group:/etc/group:ro \
     -u `id -u`:`id -g` \
-    -v "${HOME}"/.cache:/workspace/.cache \
+    -v "${HOME}"/.cache:$HOME/.cache/ -v "${HOME}"/.config:$HOME/.config/   -v "${HOME}"/.triton:$HOME/.triton/  \
     --network host \
-    gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 -m vllm.entrypoints.openai.api_server \
+    vllm/vllm-openai:latest \
         --port=5014 \
         --host=0.0.0.0 \
         --model=h2oai/h2o-danube-1.8b-chat \
@@ -950,39 +1105,24 @@ For h2oGPT, run:
 ```bash
 python generate.py --base_model=THUDM/cogvlm2-llama3-chat-19B --inference_server='vllm_chat:http://0.0.0.0:30030/v1'
 ```
-where by using `vllm_chat` we trigger use of the OpenAI chat like API for InternalVL models, using the GPT-4V like API.
+where by using `vllm_chat` we trigger use of the OpenAI chat like API for internvl models, using the GPT-4V like API.
 
 ### LMDeploy for InternVL-Chat-V1.5 or LLaVa 1.5 or 1.6 (Next) vision models
 
-Make the file `Dockerfile.internalvl`:
-```text
-FROM openmmlab/lmdeploy:latest
-
-RUN apt-get update && apt-get install -y python3 python3-pip git
-
-WORKDIR /app
-
-RUN pip3 install --upgrade pip
-RUN pip3 install timm
-RUN pip3 install git+https://github.com/haotian-liu/LLaVA.git --no-deps
-
-COPY . .
-
-CMD ["lmdeploy", "serve", "api_server", "OpenGVLab/InternVL-Chat-V1-5"]
-```
-then run:
 ```bash
-docker build - < Dockerfile.internalvl -t internalvl
+docker build - < docs/Dockerfile.internvl -t internvl
 ```
-then to launch server run:
+Inside that file, one can remove the flash_attn parts if they cause troubles, not all models required it.  With the `MAX_JOBS=4` used inside, it takes about 4600 seconds to build fast attention part.
+
+Then to launch server run:
 ```bash
 docker run -d --runtime nvidia --gpus '"device=0"' \
     -v $HOME/.cache/huggingface:/root/.cache/huggingface \
     --env "HUGGING_FACE_HUB_TOKEN=$HUGGING_FACE_HUB_TOKEN" \
     -p 23333:23333 \
     --ipc=host \
-    --name internalvl-chat-v1-5_lmdeploy \
-    internalvl \
+    --name internvl-chat-v1-5_lmdeploy \
+    internvl \
     lmdeploy serve api_server OpenGVLab/InternVL-Chat-V1-5 --model-name OpenGVLab/InternVL-Chat-V1-5
 ```
 or for 34b llava next
@@ -993,7 +1133,7 @@ docker run -d --runtime nvidia --gpus '"device=1"' \
     -p 30020:23333 \
     --ipc=host \
     --name llava-v1.6-34b_lmdeploy \
-    internalvl \
+    internvl \
     lmdeploy serve api_server liuhaotian/llava-v1.6-34b --model-name liuhaotian/llava-v1.6-34b
 ```
 
@@ -1030,7 +1170,7 @@ For h2oGPT, run:
 ```bash
 python generate.py --base_model=OpenGVLab/InternVL-Chat-V1-5 --inference_server='vllm_chat:http://0.0.0.0:23333/v1'
 ```
-where by using `vllm_chat` we trigger use of the OpenAI chat like API for InternalVL models, using the GPT-4V like API.
+where by using `vllm_chat` we trigger use of the OpenAI chat like API for internvl models, using the GPT-4V like API.
 
 or for both models:
 ```bash
@@ -1267,7 +1407,7 @@ python generate.py --base_model=llama \
                    --score_model=None \
                    --embedding_gpu_id=0 \
                    --caption_gpu_id=1 \
-                   --captions_model=Salesforce/blip2-flan-t5-xl \
+                   --captions_model=microsoft/Florence-2-large \
                    --enable_pdf_doctr=on \
                    --doctr_gpu_id=2 \
                    --asr_gpu_id=3 \
@@ -1447,7 +1587,7 @@ docker run \
       -u `id -u`:`id -g` \
       -v "${HOME}"/.cache:/workspace/.cache \
       -v "${HOME}"/save:/workspace/save \
-      gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.0 /workspace/generate.py \
+      gcr.io/vorvan/h2oai/h2ogpt-runtime:0.2.1 /workspace/generate.py \
          --base_model=HuggingFaceH4/zephyr-7b-beta \
          --use_safetensors=True \
          --prompt_type=zephyr \
@@ -1506,9 +1646,9 @@ For images, there are these options with defaults
 * enable_doctr=True
 * enable_pix2struct=False
 * enable_captions=True
-* captions_model="Salesforce/blip-image-captioning-base",
+* captions_model="microsoft/Florence-2-base",
 
-So for images we always use caption model (BLIP) but one can use BLIP2 or others for more accuracy.  BLIP describes an image, while DocTR does OCR on the image.  "enable_ocr" uses Tesseract via Unstructured wrapper and is less capable than DocTR.  If these are forced on in UI, that is like choosing `True`.
+So for images we always use caption model (microsoft/Florence-2-base) but one can use microsoft/Florence-2-large for more accuracy.  microsoft/Florence-2-base describes an image, while DocTR does OCR on the image.  "enable_ocr" uses Tesseract via Unstructured wrapper and is less capable than DocTR.  If these are forced on in UI, that is like choosing `True`.
 
 To enable all options on, choose `--max_quality=True` or select in side panel->Upload->Maximum Ingest Quality.  However, this can lead to a few redundant pages in database.  So only good idea if have >4k context.
 
@@ -1516,9 +1656,8 @@ The value `--top_k_docs` sets how many chunks (for query action) or parts of doc
 
 To improve speed of parsing for captioning images and DocTR for images and PDFs, set `--pre_load_image_audio_models=True`.  Note `--pre_load_embedding_model=True` is already the default.  This preloads the models, especially useful when using GPUs.  Choose GPU IDs for each model to help distribute the load, e.g. if have 3 GPUs, the embedding model will be on GPU=0, then use `--caption_gpu_id=1` and `--doctr_gpu_id=2` and `--asr_gpu_id=3`.  This is also useful for multi-user case, else the models are loaded and unloaded for each user doing parsing, which is wasteful of GPU memory.  E.g., for maximum speed and accuracy on 4 GPUs, one could run:
 ```bash
-python generate.py --pre_load_embedding_model=True --embedding_gpu_id=0 --hf_embedding_model=BAAI/bge-large-en --cut_distance=10000 --pre_load_caption_model=True --caption_gpu_id=1 --caption_model=Salesforce/blip2-flan-t5-xl --doctr_gpu_id=2 --asr_gpu_id=3 --asr_model=openai/whisper-large-v3 --max_quality=True
+python generate.py --pre_load_embedding_model=True --embedding_gpu_id=0 --hf_embedding_model=BAAI/bge-large-en --cut_distance=10000 --pre_load_caption_model=True --caption_gpu_id=1 --caption_model=microsoft/Florence-2-large --doctr_gpu_id=2 --asr_gpu_id=3 --asr_model=openai/whisper-large-v3 --max_quality=True
 ```
-where the BLIP2 model needs 16GB and the whisper-large-v3 needs 10GB.
 
 ### Controlling Quality and Speed of Context-Filling
 
@@ -1990,7 +2129,7 @@ GGUF using Mixtral:
 ```bash
 python generate.py --base_model=TheBloke/Mixtral-8x7B-Instruct-v0.1-GGUF --prompt_type=mistral --max_seq_len=4096 --score_model=None
 ```
-Also note that Mixtral GGUF has max context of 4k if allowed to auto-detect in h2oGPT.  One can try larger up to 32k with `--max_seq_len`.  But higher uses alot of GPU memory and is slow but for document QA is probably not helpful (e.g. `--top_k_docs=-1` with 32k actually hurts RAG performance, better to limit RAG to 4k, summarization can use more though).  This can be controlled per-query with `max_input_tokens` in API/UI.
+Also note that Mixtral GGUF has max context of 4k if allowed to auto-detect in h2oGPT.  One can try larger up to 32k with `--max_seq_len`.  But higher uses significant amounts of GPU memory and is slow but for document QA is probably not helpful (e.g. `--top_k_docs=-1` with 32k actually hurts RAG performance, better to limit RAG to 4k, summarization can use more though).  This can be controlled per-query with `max_input_tokens` in API/UI.
 
 Also, with `--top_k_docs=-1` or too large positive value, context-filling of the 4k leads to very slow results for GGUF Mixtral compared to vLLM FP16 performance.
 
@@ -2258,6 +2397,7 @@ Related to transformers.  There are two independent ways to do this (choose one)
 * For GGUF models limit number of model layers put onto GPU (`--n_gpu_layers=10`)
 * Avoid metadata in context (`--metadata_in_context=None`)
 * Lower chunks (`--chunk-size=128`)
+* Small batch sizes for embedding: (ENV `CHROMA_MAX_BATCH_SIZE=100`)
 * Lower number of documetns in context (`--top_k_docs=3`)
 * Use smaller quantized model like Q4 instead of Q5 or Q6 from TheBloke (`--base_model=https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf --prompt_type=mistral`)
 
@@ -2285,7 +2425,7 @@ Also try smaller GGUF models for GPU, e.g.:
 ```bash
 python generate.py --base_model=https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf --prompt_type=zephyr --hf_embedding_model=sentence-transformers/all-MiniLM-L6-v2 --score_model=None --llamacpp_dict="{'n_gpu_layers':10}" --max_seq_len=1024 --enable_tts=False --enable_stt=False --enable_transcriptions=False --top_k_docs=3 --metadata_in_context=None
 ```
-This only uses 2GB of GPU even during usage, but will be alot slower if use only use GPU with 10 layers instead of default.  You can vary the model size from [TheBloke](https://huggingface.co/TheBloke/zephyr-7B-beta-GGUF/tree/main) and offloading to optimize your experience.
+This only uses 2GB of GPU even during usage, but will be significantly slower if you use GPU with only 10 layers instead of default.  You can vary the model size from [TheBloke](https://huggingface.co/TheBloke/zephyr-7B-beta-GGUF/tree/main) and offloading to optimize your experience.
 
 On CPU case, a good model that's still low memory is to run:
 ```bash

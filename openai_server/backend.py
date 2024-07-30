@@ -3,11 +3,13 @@ import base64
 import io
 import os
 import platform
+import sys
+import threading
 import time
+import traceback
 import uuid
 from collections import deque
 
-import filelock
 import numpy as np
 
 from log import logger
@@ -42,6 +44,11 @@ def count_tokens(x, encoding_name="cl100k_base"):
 
 
 def get_gradio_client(user=None):
+    print("GRADIO_SERVER_PORT:", os.getenv('GRADIO_SERVER_PORT'), file=sys.stderr)
+    print("GRADIO_GUEST_NAME:", os.getenv('GRADIO_GUEST_NAME'), file=sys.stderr)
+    print("GRADIO_AUTH:", os.getenv('GRADIO_AUTH'), file=sys.stderr)
+    print("GRADIO_AUTH_ACCESS:", os.getenv('GRADIO_AUTH_ACCESS'), file=sys.stderr)
+
     try:
         from gradio_utils.grclient import GradioClient as Client
         concurrent_client = True
@@ -100,23 +107,59 @@ def get_gradio_client(user=None):
     return client
 
 
+# Global lock for synchronizing client access
+client_lock = threading.Lock()
+
+print("global gradio_client", file=sys.stderr)
 gradio_client = get_gradio_client()
 
 
 def get_client(user=None):
     # concurrent gradio client
     if gradio_client is None or user is not None:
+        print("Getting fresh client: %s" % str(user), file=sys.stderr)
         # assert user is not None, "Need user set to username:password"
         client = get_gradio_client(user=user)
     elif hasattr(gradio_client, 'clone'):
+        print("gradio_client.auth=%s" % str(gradio_client.auth), file=sys.stderr)
         client = gradio_client.clone()
-        if client.get_server_hash() != gradio_client.server_hash:
-            os.makedirs('locks', exist_ok=True)
-            with filelock.FileLock(os.path.join('locks', 'openai_gradio_client.lock')):
-                gradio_client.refresh_client()
+        print("client.auth=%s" % str(client.auth), file=sys.stderr)
+        try:
+            new_hash = client.get_server_hash()
+            if new_hash != gradio_client.server_hash:
+                os.makedirs('locks', exist_ok=True)
+                with client_lock:
+                    gradio_client.refresh_client()
+        except Exception as e:
+            ex = traceback.format_exc()
+            print(ex, file=sys.stderr)
+            # just get fresh client
+            print("client", file=sys.stderr)
+            print(client, file=sys.stderr)
+            print("client dict", file=sys.stderr)
+            print(client.__dict__, file=sys.stderr)
+            print("get fresh client", file=sys.stderr)
+            client = get_gradio_client(user=user)
+            print("done fresh client", file=sys.stderr)
+            print("fresh client", file=sys.stderr)
+            print(client, file=sys.stderr)
+            print("fresh client dict", file=sys.stderr)
+            print(client.__dict__, file=sys.stderr)
+            print("cloning back to global", file=sys.stderr)
+            with client_lock:
+                for k, v in client.__dict__.items():
+                    setattr(gradio_client, k, v)
+                gradio_client.reset_session()
+
+                client.get_endpoints(gradio_client)
+
+                # transfer internals in case used
+                gradio_client.server_hash = client.server_hash
+                gradio_client.chat_conversation = client.chat_conversation
+
     else:
         print(
-            "re-get to ensure concurrency ok, slower if API is large, for speed ensure gradio_utils/grclient.py exists.")
+            "re-get to ensure concurrency ok, slower if API is large, for speed ensure gradio_utils/grclient.py exists.", file=sys.stderr)
         client = get_gradio_client(user=user)
 
     # even if not auth, want to login
@@ -264,11 +307,12 @@ def chat_completion_action(body: dict, stream_output=False) -> dict:
     resp_list = 'choices'
 
     gen_kwargs = body
-    instruction, system_message, history = convert_messages_to_structure(messages)
+    instruction, system_message, history, image_files = convert_messages_to_structure(messages)
     gen_kwargs.update({
         'system_prompt': system_message,
         'chat_conversation': history,
-        'stream_output': stream_output
+        'stream_output': stream_output,
+        'image_file': image_files,
     })
 
     def chat_streaming_chunk(content):
@@ -613,6 +657,8 @@ def text_to_audio(model, voice, input, stream, response_format, **kwargs):
 
 
 def audio_str_to_bytes(audio_str1, response_format='wav'):
+    if audio_str1 is None:
+        return b''
     # Parse the input string to a dictionary
     audio_dict = ast.literal_eval(audio_str1)
 

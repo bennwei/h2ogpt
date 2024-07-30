@@ -5,7 +5,7 @@ from transformers import TextGenerationPipeline
 from transformers.pipelines.text_generation import ReturnType, Chat
 
 from stopping import get_stopping
-from prompter import Prompter, convert_messages_and_extract_images
+from prompter import Prompter, convert_messages_and_extract_images, get_prompt  # keep for export_hf_checkpoint.py
 
 
 class H2OTextGenerationPipeline(TextGenerationPipeline):
@@ -24,6 +24,16 @@ class H2OTextGenerationPipeline(TextGenerationPipeline):
 
                  image_file=None,
                  image_control=None,
+                 images_num_max=None,
+                 image_resolution=None,
+                 image_format=None,
+                 rotate_align_resize_image=None,
+                 video_frame_period=None,
+                 image_batch_image_prompt=None,
+                 image_batch_final_prompt=None,
+                 image_batch_stream=None,
+                 visible_vision_models=None,
+                 video_file=None,
 
                  verbose=False,
                  **kwargs):
@@ -78,6 +88,16 @@ class H2OTextGenerationPipeline(TextGenerationPipeline):
 
         self.image_file = image_file
         self.image_control = image_control
+        self.images_num_max = images_num_max
+        self.image_resolution = image_resolution
+        self.image_format = image_format
+        self.rotate_align_resize_image = rotate_align_resize_image
+        self.video_frame_period = video_frame_period
+        self.image_batch_image_prompt = image_batch_image_prompt
+        self.image_batch_final_prompt = image_batch_final_prompt
+        self.image_batch_stream = image_batch_stream
+        self.visible_vision_models = visible_vision_models
+        self.video_file = video_file
 
     @staticmethod
     def get_token_count(x, tokenizer):
@@ -110,9 +130,15 @@ class H2OTextGenerationPipeline(TextGenerationPipeline):
             model_max_length = int(tokenizer.model_max_length)
             if max_prompt_length is not None:
                 model_max_length = int(min(model_max_length, max_prompt_length))
+                buffer = 0
             # cut at some upper likely limit to avoid excessive tokenization etc
             # upper bound of 10 chars/token, e.g. special chars sometimes are long
-            if len(prompt_text) > model_max_length * 10:
+            if model_max_length == 0:
+                len0 = len(prompt_text)
+                prompt_text = ''
+                if verbose:
+                    print("Cut of input: %s -> %s" % (len0, len(prompt_text)), flush=True)
+            elif len(prompt_text) > model_max_length * 10:
                 len0 = len(prompt_text)
                 prompt_text = prompt_text[-model_max_length * 10:]
                 if verbose:
@@ -136,7 +162,7 @@ class H2OTextGenerationPipeline(TextGenerationPipeline):
                     # conservative by using int()
                     chars_per_token = len(prompt_text) / num_prompt_tokens
                     # keep tail, where question is if using langchain
-                    model_max_length_with_buffer = model_max_length - buffer
+                    model_max_length_with_buffer = max(0, model_max_length - buffer)
                     prompt_text = prompt_text[-int(model_max_length_with_buffer * chars_per_token):]
                     if verbose:
                         print("reducing %s tokens, assuming average of %s chars/token for %s characters" % (
@@ -171,15 +197,15 @@ class H2OTextGenerationPipeline(TextGenerationPipeline):
                                 **generate_kwargs)
 
     def _preprocess(
-        self,
-        prompt_text,
-        prefix="",
-        handle_long_generation=None,
-        add_special_tokens=False,
-        truncation=None,
-        padding=False,
-        max_length=None,
-        **generate_kwargs,
+            self,
+            prompt_text,
+            prefix="",
+            handle_long_generation=None,
+            add_special_tokens=False,
+            truncation=None,
+            padding=False,
+            max_length=None,
+            **generate_kwargs,
     ):
         if self.image_file:
             from transformers.image_utils import load_image

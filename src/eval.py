@@ -12,7 +12,7 @@ from utils import clear_torch_cache, NullContext, get_kwargs, makedirs
 
 def run_eval(  # for local function:
         base_model=None, lora_weights=None, inference_server=None, regenerate_clients=None, regenerate_gradio_clients=None,
-        prompt_type=None, prompt_dict=None, system_prompt=None,
+        prompt_type=None, prompt_dict=None, chat_template=None, system_prompt=None,
         debug=None, chat=False,
         stream_output=None, async_output=None, num_async=None, stream_map=None,
         eval_filename=None, eval_prompts_only_num=None, eval_prompts_only_seed=None, eval_as_output=None,
@@ -103,6 +103,16 @@ def run_eval(  # for local function:
         tts_speed=None,
         image_file=None,
         image_control=None,
+        images_num_max=None,
+        image_resolution=None,
+        image_format=None,
+        rotate_align_resize_image=None,
+        video_frame_period=None,
+        image_batch_image_prompt=None,
+        image_batch_final_prompt=None,
+        image_batch_stream=None,
+        visible_vision_models=None,
+        video_file=None,
 
         response_format=None,
         guided_json=None,
@@ -309,7 +319,7 @@ def run_eval(  # for local function:
                         data_point = dict(instruction=instruction, input=iinput, context=context)
                         prompter = Prompter(prompt_type, prompt_dict,
                                             debug=debug, stream_output=stream_output)
-                        prompt = prompter.generate_prompt(data_point, context_from_history=False)
+                        prompt = prompter.generate_prompt(data_point, context_from_history=False, image_file=image_file)
                     else:
                         # just raw input and output
                         if eval_prompts_only_num > 0:
@@ -317,7 +327,7 @@ def run_eval(  # for local function:
                             assert iinput in [None, ''], iinput  # should be no iinput
                         prompt = instruction
                     score = score_qa(smodel, stokenizer, prompt, res, memory_restriction_level=memory_restriction_level)
-                    score_dump.append(ex + [prompt, res, score])
+                    score_dump.append(ex + [prompt, res, score, sources])
                     # dump every score in case abort
                     df_scores = pd.DataFrame(score_dump,
                                              columns=eval_func_param_names +
